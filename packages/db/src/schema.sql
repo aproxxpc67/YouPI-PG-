@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS payment_sessions (
     receiving_account_id TEXT REFERENCES payment_receiving_accounts(id),
     order_id VARCHAR(255) NOT NULL,
     amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
+    payable_amount_paise BIGINT,
     currency VARCHAR(3) NOT NULL DEFAULT 'INR',
     method VARCHAR(50) NOT NULL DEFAULT 'UPI',
     status VARCHAR(50) NOT NULL DEFAULT 'INITIATED',

@@ -553,12 +553,20 @@ export class PaymentVerificationPipeline {
     if (!session && parsedData?.amountPaise) {
       const matchRow = this.db.queryOne(`
         SELECT * FROM payment_sessions
-        WHERE status IN ('ACTIVE', 'PROCESSING') AND amount_paise = ?
+        WHERE status IN ('ACTIVE', 'PROCESSING') AND COALESCE(payable_amount_paise, amount_paise) = ?
         ORDER BY created_at DESC LIMIT 1
       `, [Number(parsedData.amountPaise)]);
       if (matchRow) {
         session = this.sessionRepo.mapRow(matchRow);
       }
+    }
+
+    // Several sessions can be live on one receiving account, each with a unique payable amount.
+    // Unless a specific session was requested, re-resolve to the one this credit's amount belongs to.
+    if (session && !input.paymentSessionId && session.receivingAccountId && parsedData?.amountPaise &&
+        BigInt(session.payableAmountPaise ?? session.amountPaise) !== BigInt(parsedData.amountPaise)) {
+      const amountMatch = this.sessionRepo.findActiveByPayableAmount(session.receivingAccountId, parsedData.amountPaise);
+      if (amountMatch) session = amountMatch;
     }
 
     if (!session) {
@@ -642,8 +650,9 @@ export class PaymentVerificationPipeline {
     }
 
     // 3. Amount Match Check
-    if (BigInt(session.amountPaise) !== BigInt(parsedData.amountPaise)) {
-      const expectedAmount = (Number(session.amountPaise) / 100).toFixed(2);
+    const expectedPaise = session.payableAmountPaise ?? session.amountPaise;
+    if (BigInt(expectedPaise) !== BigInt(parsedData.amountPaise)) {
+      const expectedAmount = (Number(expectedPaise) / 100).toFixed(2);
       const gotAmount = (Number(parsedData.amountPaise) / 100).toFixed(2);
       stage4 = {
         stage: 4,
@@ -808,7 +817,7 @@ export class PaymentVerificationPipeline {
     const targetsCustomerSession = Boolean(session && (
       session.customerId === customer?.id ||
       input.paymentSessionId === session.id ||
-      (parsedData?.amountPaise && session.amountPaise && BigInt(parsedData.amountPaise) === BigInt(session.amountPaise))
+      (parsedData?.amountPaise && session.amountPaise && BigInt(parsedData.amountPaise) === BigInt(session.payableAmountPaise ?? session.amountPaise))
     ));
 
     // Automatic banning should occur ONLY when all 6 conditions are positively established

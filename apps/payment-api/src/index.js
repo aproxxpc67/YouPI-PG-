@@ -322,10 +322,14 @@ export function createPaymentApp(customDb = null, options = {}) {
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      // Scan for vacant receiving accounts that have waiting queued sessions
+      // Scan for receiving accounts that have waiting queued sessions. With unique payable
+      // amounts an account can take more sessions while busy, so don't require a vacant slot.
       const vacantAccounts = db.query(`
-        SELECT id FROM payment_receiving_accounts
-        WHERE is_active = 1 AND (is_slot_busy = 0 OR current_active_session_id IS NULL)
+        SELECT ra.id FROM payment_receiving_accounts ra
+        WHERE ra.is_active = 1 AND EXISTS (
+          SELECT 1 FROM payment_sessions ps
+          WHERE ps.receiving_account_id = ra.id AND ps.status = 'QUEUED'
+        )
       `);
 
       for (const acc of vacantAccounts) {

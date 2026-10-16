@@ -19,6 +19,7 @@
 | `JWT_SECRET` | `32+ chars` | Secret key for customer and admin session tokens |
 | `PAYMENT_ACTIVE_WINDOW_MS` | `300000` | Duration of active payment slot (5 minutes = 300,000ms) |
 | `PAYMENT_PROCESSING_WINDOW_MS` | `30000` | Duration of verification slot (30 seconds = 30,000ms) |
+| `YOUPI_MAX_AMOUNT_OFFSET_PAISE` | `0` | Max paise added to an order amount to make it unique on a UPI ID, so several customers can pay the same UPI ID at once (e.g. ₹499.00, ₹499.01, ₹499.02). `0` keeps one payment at a time per UPI ID; `99` allows up to 100 concurrent sessions per order amount |
 | `LATE_OBSERVATION_WINDOW_MS` | `1800000` | Safety window for matching late observations (30 minutes) |
 | `ANDROID_ENROLLMENT_SECRET` | `32+ chars` | Ephemeral secret token used to authorize device QR pairing |
 | `ANDROID_HEARTBEAT_TIMEOUT_MS` | `180000` | Inactivity window before Android device is marked DISCONNECTED |

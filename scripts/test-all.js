@@ -7,6 +7,7 @@ const testFiles = [
   'packages/db/src/__tests__/db.test.js',
   'packages/core/src/__tests__/core.test.js',
   'packages/core/src/__tests__/queue-timing.test.js',
+  'packages/core/src/__tests__/unique-amount-slots.test.js',
   'packages/core/src/__tests__/webhook-engine.test.js',
   'packages/merchant-sdk/src/__tests__/merchant-sdk.test.js',
   'packages/merchant-sdk/src/__tests__/youpi-universal-integration.test.js',

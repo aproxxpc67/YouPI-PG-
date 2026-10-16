@@ -1,12 +1,26 @@
 import crypto from 'node:crypto';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
 
+const DEFAULT_MAX_AMOUNT_OFFSET_PAISE = 0; // legacy single-slot unless configured
+// A payable amount stays reserved after its session ends so that a late bank alert
+// for it is never credited to a newer session that happens to reuse the same amount.
+const UNPAID_AMOUNT_RESERVATION_MS = 30 * 60 * 1000; // matches the late-observation window
+const PAID_AMOUNT_RESERVATION_MS = 5 * 60 * 1000; // covers duplicate alerts from a second observer
+
 export class PaymentSessionRepository {
   /**
    * @param {import('../database.js').Database} db
+   * @param {{ maxAmountOffsetPaise?: number }} [options]
+   *   maxAmountOffsetPaise: how many paise may be added to an order amount to make it unique
+   *   on a receiving account, allowing that many extra concurrent ACTIVE sessions per amount.
+   *   0 (the default) keeps the legacy single-active-slot behaviour. Defaults to env
+   *   YOUPI_MAX_AMOUNT_OFFSET_PAISE, else 0. 99 allows up to 100 concurrent sessions per amount.
    */
-  constructor(db) {
+  constructor(db, options = {}) {
     this.db = db;
+    const configured = options.maxAmountOffsetPaise ?? process.env.YOUPI_MAX_AMOUNT_OFFSET_PAISE ?? DEFAULT_MAX_AMOUNT_OFFSET_PAISE;
+    const parsed = Number.parseInt(configured, 10);
+    this.maxAmountOffsetPaise = Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MAX_AMOUNT_OFFSET_PAISE;
   }
 
   create(data) {
@@ -78,55 +92,65 @@ export class PaymentSessionRepository {
 
   /**
    * Atomic slot acquisition transaction for UPI payments.
-   * Invariant: Only ONE active or processing session per receiving account.
-   * If slot is free, session transitions to ACTIVE with 5:00 window.
-   * If slot is occupied, session transitions to QUEUED with sequence position.
+   *
+   * Bank alerts carry no order reference, so a credit can only be attributed by its exact
+   * amount. Each ACTIVE/PROCESSING session on a receiving account therefore gets a payable
+   * amount that is unique on that account: the order amount plus the smallest free offset
+   * of 0..maxAmountOffsetPaise paise (e.g. Rs 499.00, Rs 499.01, Rs 499.02 ...).
+   * If no offset is free the session is QUEUED, as before.
+   *
+   * With maxAmountOffsetPaise = 0 this is the legacy invariant: only ONE active or
+   * processing session per receiving account, all others QUEUED.
    */
   acquireSlotAtomic(sessionId, receivingAccountId, durationMs = 300000) {
     return this.db.transaction(() => {
       const now = new Date();
       const nowIso = now.toISOString();
 
-      // Check for current active or processing session on this receiving account
-      let activeRow = this.db.queryOne(`
-        SELECT id, status, expires_at, processing_expires_at
+      const liveRows = this.db.query(`
+        SELECT id, status, expires_at, processing_expires_at, amount_paise, payable_amount_paise
         FROM payment_sessions
         WHERE receiving_account_id = ? AND status IN (?, ?)
-        LIMIT 1
       `, [receivingAccountId, PaymentStatus.ACTIVE, PaymentStatus.PROCESSING]);
 
-      if (activeRow) {
-        const isStale = (activeRow.status === PaymentStatus.ACTIVE && activeRow.expires_at && new Date(activeRow.expires_at) <= now) ||
-          (activeRow.status === PaymentStatus.PROCESSING && activeRow.processing_expires_at && new Date(activeRow.processing_expires_at) <= now);
-        if (isStale) {
-          const terminalStatus = activeRow.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.EXPIRED;
+      const activeRows = [];
+      for (const row of liveRows) {
+        if (this.isStaleRow(row, now)) {
+          const terminalStatus = row.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.EXPIRED;
           this.db.execute(`
             UPDATE payment_sessions
             SET status = ?, completed_at = ?, updated_at = ?
             WHERE id = ?
-          `, [terminalStatus, nowIso, nowIso, activeRow.id]);
-          activeRow = null;
+          `, [terminalStatus, nowIso, nowIso, row.id]);
+        } else {
+          activeRows.push(row);
         }
       }
 
-      // CRITICAL GUARD: If activeRow is THIS session itself, it's ALREADY ACTIVE! Do not demote to QUEUED!
-      if (activeRow && activeRow.id === sessionId) {
+      // CRITICAL GUARD: If THIS session is already active, do not demote it to QUEUED!
+      const self = activeRows.find(r => r.id === sessionId);
+      if (self) {
         return {
           status: PaymentStatus.ACTIVE,
           queuePosition: 0,
-          expiresAt: activeRow.expires_at ? new Date(activeRow.expires_at) : new Date(now.getTime() + durationMs)
+          expiresAt: self.expires_at ? new Date(self.expires_at) : new Date(now.getTime() + durationMs),
+          payableAmountPaise: BigInt(self.payable_amount_paise ?? self.amount_paise)
         };
       }
 
-      if (!activeRow) {
-        // Slot is vacant! Grant ACTIVE slot
+      const sessionRow = this.db.queryOne('SELECT amount_paise, queue_position FROM payment_sessions WHERE id = ?', [sessionId]);
+      const payableAmountPaise = sessionRow
+        ? this.allocatePayableAmount(receivingAccountId, Number(sessionRow.amount_paise), activeRows, now)
+        : null;
+
+      if (payableAmountPaise !== null) {
         const expiresAt = new Date(now.getTime() + durationMs).toISOString();
 
         this.db.execute(`
           UPDATE payment_sessions
-          SET status = ?, slot_acquired_at = ?, expires_at = ?, queue_position = 0, updated_at = ?
+          SET status = ?, slot_acquired_at = ?, expires_at = ?, queue_position = 0, payable_amount_paise = ?, updated_at = ?
           WHERE id = ?
-        `, [PaymentStatus.ACTIVE, nowIso, expiresAt, nowIso, sessionId]);
+        `, [PaymentStatus.ACTIVE, nowIso, expiresAt, payableAmountPaise, nowIso, sessionId]);
 
         // Mark receiving account as busy
         this.db.execute(`
@@ -138,35 +162,104 @@ export class PaymentSessionRepository {
         return {
           status: PaymentStatus.ACTIVE,
           queuePosition: 0,
-          expiresAt: new Date(expiresAt)
-        };
-      } else {
-        // Slot is busy! Place in QUEUED
-        const existingSession = this.findById(sessionId);
-        let queuePosition = existingSession?.queuePosition;
-        if (!queuePosition || queuePosition <= 0) {
-          const posRow = this.db.queryOne(`
-            SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_pos
-            FROM payment_sessions
-            WHERE receiving_account_id = ? AND status = ?
-          `, [receivingAccountId, PaymentStatus.QUEUED]);
-
-          queuePosition = posRow ? posRow.next_pos : 1;
-        }
-
-        this.db.execute(`
-          UPDATE payment_sessions
-          SET status = ?, queue_position = ?, updated_at = ?
-          WHERE id = ?
-        `, [PaymentStatus.QUEUED, queuePosition, nowIso, sessionId]);
-
-        return {
-          status: PaymentStatus.QUEUED,
-          queuePosition,
-          expiresAt: null
+          expiresAt: new Date(expiresAt),
+          payableAmountPaise: BigInt(payableAmountPaise)
         };
       }
+
+      // No unique amount available: place in QUEUED
+      let queuePosition = sessionRow?.queue_position;
+      if (!queuePosition || queuePosition <= 0) {
+        const posRow = this.db.queryOne(`
+          SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_pos
+          FROM payment_sessions
+          WHERE receiving_account_id = ? AND status = ?
+        `, [receivingAccountId, PaymentStatus.QUEUED]);
+
+        queuePosition = posRow ? posRow.next_pos : 1;
+      }
+
+      this.db.execute(`
+        UPDATE payment_sessions
+        SET status = ?, queue_position = ?, updated_at = ?
+        WHERE id = ?
+      `, [PaymentStatus.QUEUED, queuePosition, nowIso, sessionId]);
+
+      return {
+        status: PaymentStatus.QUEUED,
+        queuePosition,
+        expiresAt: null
+      };
     });
+  }
+
+  /**
+   * Picks the smallest payable amount (orderAmount + 0..maxAmountOffsetPaise) that no live or
+   * recently ended session on the receiving account is using. Returns null if none is free.
+   * Must be called inside a transaction.
+   * @param {string} receivingAccountId
+   * @param {number} amountPaise
+   * @param {Array<{ amount_paise: number, payable_amount_paise: number | null }>} activeRows
+   * @param {Date} now
+   * @returns {number | null}
+   */
+  allocatePayableAmount(receivingAccountId, amountPaise, activeRows, now) {
+    if (this.maxAmountOffsetPaise === 0) {
+      return activeRows.length === 0 ? amountPaise : null;
+    }
+
+    const maxPayable = amountPaise + this.maxAmountOffsetPaise;
+    const unpaidSince = new Date(now.getTime() - UNPAID_AMOUNT_RESERVATION_MS).toISOString();
+    const paidSince = new Date(now.getTime() - PAID_AMOUNT_RESERVATION_MS).toISOString();
+    const recentRows = this.db.query(`
+      SELECT COALESCE(payable_amount_paise, amount_paise) AS payable
+      FROM payment_sessions
+      WHERE receiving_account_id = ?
+        AND slot_acquired_at IS NOT NULL
+        AND COALESCE(payable_amount_paise, amount_paise) BETWEEN ? AND ?
+        AND (
+          (status IN (?, ?, ?) AND updated_at >= ?)
+          OR (status = ? AND COALESCE(completed_at, updated_at) >= ?)
+        )
+    `, [
+      receivingAccountId, amountPaise, maxPayable,
+      PaymentStatus.EXPIRED, PaymentStatus.FAILED, PaymentStatus.CANCELLED, unpaidSince,
+      PaymentStatus.SUCCESS, paidSince
+    ]);
+
+    const taken = new Set(recentRows.map(r => Number(r.payable)));
+    for (const row of activeRows) {
+      taken.add(Number(row.payable_amount_paise ?? row.amount_paise));
+    }
+
+    for (let candidate = amountPaise; candidate <= maxPayable; candidate++) {
+      if (!taken.has(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  isStaleRow(row, now = new Date()) {
+    return (row.status === PaymentStatus.ACTIVE && row.expires_at && new Date(row.expires_at) <= now) ||
+      (row.status === PaymentStatus.PROCESSING && row.processing_expires_at && new Date(row.processing_expires_at) <= now);
+  }
+
+  /**
+   * Keeps the receiving account's slot flags pointing at a live session, if any remain.
+   * Must be called inside a transaction.
+   */
+  refreshAccountSlot(receivingAccountId, nowIso = new Date().toISOString()) {
+    const remaining = this.db.queryOne(`
+      SELECT id FROM payment_sessions
+      WHERE receiving_account_id = ? AND status IN (?, ?)
+      ORDER BY slot_acquired_at DESC
+      LIMIT 1
+    `, [receivingAccountId, PaymentStatus.ACTIVE, PaymentStatus.PROCESSING]);
+
+    this.db.execute(`
+      UPDATE payment_receiving_accounts
+      SET is_slot_busy = ?, current_active_session_id = ?, updated_at = ?
+      WHERE id = ?
+    `, [remaining ? 1 : 0, remaining ? remaining.id : null, nowIso, receivingAccountId]);
   }
 
   /**
@@ -245,13 +338,9 @@ export class PaymentSessionRepository {
         WHERE id = ?
       `, [targetStatus, now, attributedObsId, JSON.stringify(metadata), now, sessionId]);
 
-      // Release slot on receiving account if this session owned it
+      // Release this session's slot on the receiving account (other sessions may still hold theirs)
       if (session.receivingAccountId) {
-        this.db.execute(`
-          UPDATE payment_receiving_accounts
-          SET is_slot_busy = 0, current_active_session_id = NULL, updated_at = ?
-          WHERE id = ? AND (current_active_session_id = ? OR current_active_session_id IS NULL)
-        `, [now, session.receivingAccountId, sessionId]);
+        this.refreshAccountSlot(session.receivingAccountId, now);
       }
 
       return this.findById(sessionId);
@@ -270,6 +359,30 @@ export class PaymentSessionRepository {
     const isStale = (row.status === PaymentStatus.ACTIVE && row.expires_at && new Date(row.expires_at) <= now) ||
       (row.status === PaymentStatus.PROCESSING && row.processing_expires_at && new Date(row.processing_expires_at) <= now);
     if (isStale) {
+      const terminalStatus = row.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.EXPIRED;
+      this.transitionToTerminal(row.id, terminalStatus);
+      return null;
+    }
+    return this.mapRow(row);
+  }
+
+  /**
+   * Finds the live (ACTIVE or PROCESSING) session on a receiving account whose payable
+   * amount is exactly amountPaise.
+   * @param {string} receivingAccountId
+   * @param {bigint | number} amountPaise
+   */
+  findActiveByPayableAmount(receivingAccountId, amountPaise) {
+    const row = this.db.queryOne(`
+      SELECT * FROM payment_sessions
+      WHERE receiving_account_id = ? AND status IN (?, ?)
+        AND COALESCE(payable_amount_paise, amount_paise) = ?
+      ORDER BY slot_acquired_at DESC
+      LIMIT 1
+    `, [receivingAccountId, PaymentStatus.ACTIVE, PaymentStatus.PROCESSING, Number(amountPaise)]);
+
+    if (!row) return null;
+    if (this.isStaleRow(row)) {
       const terminalStatus = row.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.EXPIRED;
       this.transitionToTerminal(row.id, terminalStatus);
       return null;
@@ -504,11 +617,7 @@ export class PaymentSessionRepository {
 
       // If this transition made it terminal SUCCESS, release slot on receiving account
       if (targetStatus === PaymentStatus.SUCCESS && session.receivingAccountId) {
-        this.db.execute(`
-          UPDATE payment_receiving_accounts
-          SET is_slot_busy = 0, current_active_session_id = NULL, updated_at = ?
-          WHERE id = ? AND current_active_session_id = ?
-        `, [now, session.receivingAccountId, sessionId]);
+        this.refreshAccountSlot(session.receivingAccountId, now);
       }
 
       const updated = this.findById(sessionId);
@@ -539,6 +648,8 @@ export class PaymentSessionRepository {
       receivingAccountId: row.receiving_account_id,
       orderId: row.order_id,
       amountPaise: BigInt(row.amount_paise),
+      // The exact amount the customer is asked to pay; unique per receiving account while live
+      payableAmountPaise: BigInt(row.payable_amount_paise ?? row.amount_paise),
       currency: row.currency,
       method: row.method,
       status: row.status,

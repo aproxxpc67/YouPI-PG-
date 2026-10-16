@@ -147,30 +147,21 @@ export class AttributionEngine {
     // Persist new observation as UNATTRIBUTED first
     const savedObs = this.obsRepo.create(normalizedObs);
 
-    // Tier 2: Check currently active session on receiving account
+    // Tier 2: Find the live session on this receiving account whose unique payable amount
+    // (order amount + paise offset) equals the observed credit exactly.
     let currentSession = null;
     if (normalizedObs.rawPayload?.targetSessionId) {
       currentSession = this.sessionRepo.findById(normalizedObs.rawPayload.targetSessionId);
     }
-    if (!currentSession || (currentSession.amountPaise !== normalizedObs.amountPaise)) {
-      currentSession = this.sessionRepo.findCurrentActiveOrProcessing(normalizedObs.receivingAccountId);
-    }
-    if (currentSession && currentSession.amountPaise !== normalizedObs.amountPaise) {
-      const matchRow = this.sessionRepo.db.queryOne(`
-        SELECT * FROM payment_sessions
-        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING') AND amount_paise = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [normalizedObs.receivingAccountId, Number(normalizedObs.amountPaise)]);
-      if (matchRow) {
-        currentSession = this.sessionRepo.mapRow(matchRow);
-      }
+    if (!currentSession || (currentSession.payableAmountPaise !== normalizedObs.amountPaise)) {
+      currentSession = this.sessionRepo.findActiveByPayableAmount(normalizedObs.receivingAccountId, normalizedObs.amountPaise)
+        || this.sessionRepo.findCurrentActiveOrProcessing(normalizedObs.receivingAccountId);
     }
     if (!currentSession) {
       // Fallback: Check if there is an ACTIVE or PROCESSING session matching this exact amount anywhere on the gateway
       const anyActive = this.sessionRepo.db.queryOne(`
         SELECT * FROM payment_sessions
-        WHERE status IN ('ACTIVE', 'PROCESSING') AND amount_paise = ?
+        WHERE status IN ('ACTIVE', 'PROCESSING') AND COALESCE(payable_amount_paise, amount_paise) = ?
         ORDER BY created_at DESC
         LIMIT 1
       `, [Number(normalizedObs.amountPaise)]);
@@ -183,8 +174,8 @@ export class AttributionEngine {
       // Invariant Check 1: Must be in ACTIVE or PROCESSING status
       const isEligibleStatus = [PaymentStatus.ACTIVE, PaymentStatus.PROCESSING].includes(currentSession.status);
 
-      // Invariant Check 2: Exact Amount Match (in integer paise)
-      const isAmountMatch = currentSession.amountPaise === normalizedObs.amountPaise;
+      // Invariant Check 2: Exact Amount Match (in integer paise) against the unique payable amount
+      const isAmountMatch = currentSession.payableAmountPaise === normalizedObs.amountPaise;
 
       // Invariant Check 3: Temporal Window (with 5-minute clock skew tolerance, strictly preventing hijacking of prior expired sessions)
       let isPriorExpiredSession = false;
@@ -194,7 +185,7 @@ export class AttributionEngine {
           normalizedObs.receivingAccountId,
           thirtyMinutesAgo
         );
-        isPriorExpiredSession = recentExpired.some(s => s.amountPaise === normalizedObs.amountPaise);
+        isPriorExpiredSession = recentExpired.some(s => s.payableAmountPaise === normalizedObs.amountPaise);
       }
 
       const slotStart = currentSession.slotAcquiredAt
@@ -413,7 +404,7 @@ export class AttributionEngine {
     const recentSuccessSession = this.sessionRepo.db.queryOne(`
       SELECT * FROM payment_sessions
       WHERE receiving_account_id = ? AND status = 'SUCCESS'
-        AND amount_paise = ? AND completed_at >= datetime('now', '-60 seconds')
+        AND COALESCE(payable_amount_paise, amount_paise) = ? AND completed_at >= datetime('now', '-60 seconds')
       ORDER BY completed_at DESC LIMIT 1
     `, [normalizedObs.receivingAccountId, Number(normalizedObs.amountPaise)]);
 
@@ -493,7 +484,7 @@ export class AttributionEngine {
       thirtyMinutesAgo
     );
 
-    const lateMatchedSession = recentExpired.find(s => s.amountPaise === normalizedObs.amountPaise);
+    const lateMatchedSession = recentExpired.find(s => s.payableAmountPaise === normalizedObs.amountPaise);
 
     if (lateMatchedSession) {
       // Mark observation as LATE_UNMATCHED

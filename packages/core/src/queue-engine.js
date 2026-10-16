@@ -64,16 +64,20 @@ export class QueueEngine {
   }
 
   /**
-   * Promotes the next queued session for a receiving account if the slot is free.
+   * Promotes the next queued session for a receiving account if a slot is free.
+   * In legacy single-slot mode a slot is free only when no session is live; otherwise
+   * acquireSlotAtomic decides by whether a unique payable amount is available.
    * @param {string} receivingAccountId
    * @param {number} [activeDurationMs=300000]
    * @returns {any | null} The newly activated session or null if queue is empty or slot is busy
    */
   promoteNext(receivingAccountId, activeDurationMs = 300000) {
-    // Check if slot is currently occupied
-    const active = this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
-    if (active) {
-      return null; // Slot is still owned
+    if (!this.sessionRepo.maxAmountOffsetPaise) {
+      // Check if slot is currently occupied
+      const active = this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
+      if (active) {
+        return null; // Slot is still owned
+      }
     }
 
     const nextQueued = this.sessionRepo.getNextQueuedSession(receivingAccountId);

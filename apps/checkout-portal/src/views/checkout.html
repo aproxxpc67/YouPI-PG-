@@ -5649,7 +5649,7 @@
       const pcMerchant = document.getElementById('pcMerchantName');
       if (pcMerchant) pcMerchant.textContent = data.merchantName || 'Merchant Name';
       const pcPrice = document.getElementById('pcPriceSummaryAmount');
-      if (pcPrice && data.amount) pcPrice.textContent = `₹${data.amount}`;
+      if (pcPrice && (data.payableAmount || data.amount)) pcPrice.textContent = `₹${data.payableAmount || data.amount}`;
       const pcAppBrand = document.getElementById('pcAppNameBrand');
       if (pcAppBrand) pcAppBrand.textContent = appName;
 
@@ -5783,8 +5783,8 @@
       }
 
       // 7. Amount & Order IDs
-      if (data.amount) {
-        const formatted = `₹${data.amount}`;
+      if (data.payableAmount || data.amount) {
+        const formatted = `₹${data.payableAmount || data.amount}`;
         const bAmt = document.getElementById('bottomAmountDisplay');
         if (bAmt) bAmt.textContent = formatted;
         const dAmt = document.getElementById('drawerTotalAmount');

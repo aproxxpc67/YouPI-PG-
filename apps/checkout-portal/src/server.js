@@ -108,7 +108,7 @@ export class CheckoutServer {
     html = html.replaceAll('{{PRIMARY_COLOR}}', primaryColor);
     html = html.replaceAll('{{MERCHANT_NAME}}', merchantName);
     html = html.replaceAll('{{ORDER_ID}}', orderId);
-    html = html.replaceAll('{{AMOUNT}}', state?.amount || '0.00');
+    html = html.replaceAll('{{AMOUNT}}', state?.payableAmount || state?.amount || '0.00');
     html = html.replaceAll('{{VPA}}', vpa);
     html = html.replaceAll('{{LOGO_URL}}', logoUrl);
     html = html.replaceAll('{{SIDEBAR_NOTICE}}', sidebarNotice);
@@ -219,7 +219,7 @@ export class CheckoutServer {
       if (qrMatch) {
         const paymentId = qrMatch[1];
         const state = await this.fetchPaymentState(paymentId);
-        const upiUri = state?.upiUri || `upi://pay?pa=${encodeURIComponent(state?.payeeVpa || 'merchant@upi')}&pn=${encodeURIComponent(state?.merchantName || 'Store')}&am=${encodeURIComponent(state?.amount || '100.00')}&tn=${encodeURIComponent(paymentId)}`;
+        const upiUri = state?.upiUri || `upi://pay?pa=${encodeURIComponent(state?.payeeVpa || 'merchant@upi')}&pn=${encodeURIComponent(state?.merchantName || 'Store')}&am=${encodeURIComponent(state?.payableAmount || state?.amount || '100.00')}&tn=${encodeURIComponent(paymentId)}`;
 
         const svg = generateQrSvg(upiUri, 220);
         res.writeHead(200, {

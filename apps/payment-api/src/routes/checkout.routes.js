@@ -377,6 +377,8 @@ export function registerCheckoutRoutes(server, ctx) {
         orderId: session.orderId,
         amount: toRupeesString(session.amountPaise),
         amountPaise: session.amountPaise.toString(),
+        payableAmount: toRupeesString(session.payableAmountPaise),
+        payableAmountPaise: session.payableAmountPaise.toString(),
         currency: session.currency,
         status: session.status,
         timeRemainingSeconds: 0,
@@ -431,7 +433,7 @@ export function registerCheckoutRoutes(server, ctx) {
         upiUri = buildUpiUri({
           payeeVpa,
           payeeName,
-          amountPaise: session.amountPaise,
+          amountPaise: session.payableAmountPaise,
           transactionRef: session.orderId,
           currency: session.currency || 'INR'
         });
@@ -552,7 +554,7 @@ export function registerCheckoutRoutes(server, ctx) {
           upiUri = buildUpiUri({
             payeeVpa,
             payeeName,
-            amountPaise: session.amountPaise,
+            amountPaise: session.payableAmountPaise,
             transactionRef: session.orderId,
             currency: session.currency || 'INR'
           });
@@ -571,6 +573,9 @@ export function registerCheckoutRoutes(server, ctx) {
       merchantName: merchant?.businessName || 'Merchant',
       amount: toRupeesString(session.amountPaise),
       amountPaise: session.amountPaise.toString(),
+      // Exact amount to pay over UPI: order amount plus a few paise that make it unique on this account
+      payableAmount: toRupeesString(session.payableAmountPaise),
+      payableAmountPaise: session.payableAmountPaise.toString(),
       currency: session.currency,
       status: session.status,
       reason: session.metadata?.cancelledReason || null,
