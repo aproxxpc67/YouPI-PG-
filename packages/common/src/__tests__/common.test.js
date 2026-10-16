@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildCloudflaredInvocation,
+  safeEqual,
   toPaise,
   toRupeesString,
   formatINR,
@@ -236,5 +238,37 @@ describe('@youpi/common Unit Tests', () => {
 
       assert.notEqual(fp1, fpDiffTime);
     });
+  });
+});
+
+describe('buildCloudflaredInvocation', () => {
+  const token = 'eyJhIjoiMDEyMzQ1Njc4OSIsInQiOiJhYmNkZWYifQ==';
+
+  test('extracts the token from pasted cloudflared commands and never returns the pasted text', () => {
+    for (const cmd of [
+      `cloudflared.exe service install ${token}`,
+      `cloudflared tunnel run --token ${token}`,
+      token
+    ]) {
+      const inv = buildCloudflaredInvocation(cmd);
+      assert.equal(inv.file, 'cloudflared');
+      assert.deepEqual(inv.args, ['tunnel', '--no-autoupdate', 'run', '--token', token]);
+      assert.ok(!inv.redacted.includes(token));
+    }
+  });
+
+  test('rejects commands without a token, including shell payloads', () => {
+    assert.throws(() => buildCloudflaredInvocation(''), /empty/);
+    assert.throws(() => buildCloudflaredInvocation('calc.exe & whoami'), /No valid Cloudflare tunnel token/);
+    assert.throws(() => buildCloudflaredInvocation('curl http://x | sh'), /No valid Cloudflare tunnel token/);
+  });
+});
+
+describe('safeEqual', () => {
+  test('compares strings in constant time and rejects non-strings', () => {
+    assert.equal(safeEqual('abc', 'abc'), true);
+    assert.equal(safeEqual('abc', 'abd'), false);
+    assert.equal(safeEqual('abc', 'abcd'), false);
+    assert.equal(safeEqual(undefined, 'abc'), false);
   });
 });

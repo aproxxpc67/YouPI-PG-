@@ -73,4 +73,52 @@ describe('Universal YOUPI PG One-Script Integration Tests', () => {
     assert.equal(metadata.plan, 'enterprise');
     assert.equal(metadata.seats, 5);
   });
+
+  test('accepts payment events from the checkout iframe at its own origin', () => {
+    globalThis.window = { location: { href: 'https://merchant.test/shop' }, dispatchEvent: () => true };
+    try {
+      const results = [];
+      const checkoutWindow = {};
+      const instance = new YoupiCheckout({ apiUrl: 'http://localhost:1', orderId: 'O-2', amount: '10.00', handler: r => results.push(r) });
+      instance._iframe = { contentWindow: checkoutWindow };
+      instance._iframeOrigin = 'https://pay.example.com';
+      instance.close = () => {};
+
+      instance._handleMessage({
+        source: checkoutWindow,
+        origin: 'https://pay.example.com',
+        data: { event: 'youpi.payment_success', data: { orderId: 'O-2', amount: '10.00', utr: '123456789012' } }
+      });
+
+      assert.equal(results.length, 1);
+      assert.equal(results[0].status, 'SUCCESS');
+      assert.equal(results[0].order_id, 'O-2');
+    } finally {
+      delete globalThis.window;
+    }
+  });
+
+  test('ignores payment events that do not come from the checkout iframe and origin', () => {
+    globalThis.window = { location: { href: 'https://merchant.test/shop' } };
+    try {
+      let handled = 0;
+      const checkoutWindow = {};
+      const instance = new YoupiCheckout({ apiUrl: 'http://localhost:1', orderId: 'O-1', amount: '10.00', handler: () => { handled++; } });
+      instance._iframe = { contentWindow: checkoutWindow };
+      instance._iframeOrigin = 'https://pay.example.com';
+      instance.close = () => {};
+      const forged = { event: 'youpi.payment_success', data: { order_id: 'O-1', amount_received: '10.00', utr: '123456789012' } };
+
+      instance._handleMessage({ source: {}, origin: 'https://pay.example.com', data: forged });
+      instance._handleMessage({ source: checkoutWindow, origin: 'https://evil.example', data: forged });
+      assert.equal(handled, 0);
+
+      assert.equal(instance._isSafeRedirect('javascript:alert(1)'), false);
+      assert.equal(instance._isSafeRedirect('data:text/html,x'), false);
+      assert.equal(instance._isSafeRedirect('https://merchant.test/thanks'), true);
+      assert.equal(instance._isSafeRedirect('/thanks'), true);
+    } finally {
+      delete globalThis.window;
+    }
+  });
 });

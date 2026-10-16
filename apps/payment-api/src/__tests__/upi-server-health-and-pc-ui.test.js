@@ -4,6 +4,7 @@ import http from 'node:http';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   let apiInstance;
@@ -33,7 +34,7 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
       const url = new URL(path, baseUrl);
       const req = http.request(url, {
         method: options.method || 'GET',
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+        headers: { 'Content-Type': 'application/json', ...authHeadersFor(path), ...(options.headers || {}) }
       }, res => {
         let data = '';
         res.on('data', chunk => { data += chunk; });

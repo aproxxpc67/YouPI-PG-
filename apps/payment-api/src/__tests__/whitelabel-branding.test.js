@@ -2,6 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
+import { authFetch } from '../../../../scripts/test-support.js';
 
 describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
   let apiInstance;
@@ -25,7 +26,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
   });
 
   it('1. GET /api/v1/admin/merchant-settings returns baseline white-label branding', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/admin/merchant-settings?merchantId=${merchantId}`);
+    const res = await authFetch(`${baseUrl}/api/v1/admin/merchant-settings?merchantId=${merchantId}`);
     assert.strictEqual(res.status, 200);
     const body = await res.json();
     assert.ok(body.branding, 'Branding object must be present');
@@ -53,7 +54,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
       privacyPolicyUrl: 'https://aurapay.io/privacy'
     };
 
-    const updateRes = await fetch(`${baseUrl}/api/v1/admin/merchant-settings`, {
+    const updateRes = await authFetch(`${baseUrl}/api/v1/admin/merchant-settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -67,7 +68,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
     assert.strictEqual(updateBody.success, true);
 
     // Read back and assert all fields
-    const getRes = await fetch(`${baseUrl}/api/v1/admin/merchant-settings?merchantId=${merchantId}`);
+    const getRes = await authFetch(`${baseUrl}/api/v1/admin/merchant-settings?merchantId=${merchantId}`);
     const getData = await getRes.json();
     const b = getData.branding;
 
@@ -90,7 +91,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
 
   it('3. Checkout state endpoint propagates updated branding to customer checkout', async () => {
     // Initiate payment session
-    const initRes = await fetch(`${baseUrl}/api/v1/payments`, {
+    const initRes = await authFetch(`${baseUrl}/api/v1/payments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -107,7 +108,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
     assert.ok(initData.paymentId);
 
     // Fetch checkout state
-    const stateRes = await fetch(`${baseUrl}/api/v1/checkout/${initData.paymentId}/state`);
+    const stateRes = await authFetch(`${baseUrl}/api/v1/checkout/${initData.paymentId}/state`);
     assert.strictEqual(stateRes.status, 200);
     const state = await stateRes.json();
 

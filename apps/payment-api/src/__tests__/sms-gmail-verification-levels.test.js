@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { Database } from '@youpi/db';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
 import { startServer } from '../index.js';
+import { authFetch } from '../../../../scripts/test-support.js';
 
 describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', () => {
   let apiInstance;
@@ -51,7 +52,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(sQ2.id, receivingAccountId);
 
-    const clearRes = await fetch(`${baseUrl}/api/v1/admin/queue/clear`, {
+    const clearRes = await authFetch(`${baseUrl}/api/v1/admin/queue/clear`, {
       method: 'POST'
     });
     assert.equal(clearRes.status, 200);
@@ -101,7 +102,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     });
 
     // Check state of session 2 via API
-    const res = await fetch(`${baseUrl}/api/v1/checkout/${session2.id}/state`);
+    const res = await authFetch(`${baseUrl}/api/v1/checkout/${session2.id}/state`);
     assert.equal(res.status, 200);
     const state = await res.json();
 
@@ -110,7 +111,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(state.conflictingSession.id, session1.id);
 
     // Retrying new payment clears old conflict
-    const retryRes = await fetch(`${baseUrl}/api/v1/checkout/${session2.id}/retry-new-payment`, {
+    const retryRes = await authFetch(`${baseUrl}/api/v1/checkout/${session2.id}/retry-new-payment`, {
       method: 'POST'
     });
     assert.equal(retryRes.status, 200);
@@ -124,13 +125,13 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
 
   test('Android SMS Gateway pairs via QR, sends HMAC-signed bank SMS and completes payment', async () => {
     // 1. Get pairing QR from admin
-    const qrRes = await fetch(`${baseUrl}/api/v1/admin/sms-gateway/pair-qr`);
+    const qrRes = await authFetch(`${baseUrl}/api/v1/admin/sms-gateway/pair-qr`);
     assert.equal(qrRes.status, 200);
     const qrData = await qrRes.json();
     assert.ok(qrData.enrollmentToken);
 
     // 2. Mobile app pairs
-    const pairRes = await fetch(`${baseUrl}/api/v1/observers/sms/pair`, {
+    const pairRes = await authFetch(`${baseUrl}/api/v1/observers/sms/pair`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -168,7 +169,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const sigPayload = `${bodyStr}:${timestamp}`;
     const signature = crypto.createHmac('sha256', pairData.signingKey).update(sigPayload).digest('hex');
 
-    const smsRes = await fetch(`${baseUrl}/api/v1/observers/sms`, {
+    const smsRes = await authFetch(`${baseUrl}/api/v1/observers/sms`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -189,7 +190,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(smsResult.attribution.verificationLevel, 1);
 
     // 2nd hit arrives from Gmail poller within 5s grace window -> upgrades to Level 2 Dual Verification
-    const gmailRes = await fetch(`${baseUrl}/api/v1/pollers/events`, {
+    const gmailRes = await authFetch(`${baseUrl}/api/v1/pollers/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -214,7 +215,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
   });
 
   test('Gmail credentials can be saved and connection tested via Admin API', async () => {
-    const saveRes = await fetch(`${baseUrl}/api/v1/admin/gmail/credentials`, {
+    const saveRes = await authFetch(`${baseUrl}/api/v1/admin/gmail/credentials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -228,13 +229,13 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(saveData.success, true);
     assert.equal(saveData.status, 'CONFIGURED');
 
-    const getRes = await fetch(`${baseUrl}/api/v1/admin/gmail/credentials`);
+    const getRes = await authFetch(`${baseUrl}/api/v1/admin/gmail/credentials`);
     assert.equal(getRes.status, 200);
     const getData = await getRes.json();
     assert.equal(getData.gmailConfig.clientId, 'test-client-id.apps.googleusercontent.com');
 
     // Test connection endpoint
-    const testRes = await fetch(`${baseUrl}/api/v1/admin/gmail/test`, {
+    const testRes = await authFetch(`${baseUrl}/api/v1/admin/gmail/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -245,7 +246,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
   });
 
   test('Downloads standalone Android APK binary from Payment API', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/admin/sms-gateway/download-apk`);
+    const res = await authFetch(`${baseUrl}/api/v1/admin/sms-gateway/download-apk`);
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'application/vnd.android.package-archive');
     const buf = await res.arrayBuffer();

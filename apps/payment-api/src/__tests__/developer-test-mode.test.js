@@ -4,6 +4,7 @@ import http from 'node:http';
 import { Database, CustomerRepository, PaymentSessionRepository, MerchantRepository } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () => {
   let apiInstance;
@@ -38,7 +39,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
         headers: {
           'Content-Type': 'application/json',
           'x-merchant-id': merchantId,
-          ...(options.headers || {})
+          ...authHeadersFor(path), ...(options.headers || {})
         }
       }, res => {
         let data = '';

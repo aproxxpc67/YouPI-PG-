@@ -3171,7 +3171,7 @@
             <li>In <strong>Google Cloud Console</strong> &gt; <em>Credentials</em>, add this exact redirect URI:
               <code
                 style="color:#38bdf8; display:block; margin:0.2rem 0; background:#020617; padding:2px 6px; border-radius:4px;"
-                id="guideProdUri">https://pay-gmail.gauravtesting.online/oauth/callback</code>
+                id="guideProdUri">(loaded from your configured domain)</code>
             </li>
             <li>Under <em>OAuth consent screen</em> &gt; <em>Test users</em>, ensure your personal Gmail address is
               added.</li>
@@ -3375,6 +3375,85 @@
   <div id="cashierFloatingDock" class="cashier-floating-dock"></div>
 
   <script>
+    // --- Admin API authentication ---------------------------------------------------------
+    // /api/v1/admin/* requires the admin token (ADMIN_API_TOKEN, or the generated file
+    // data/.secrets/admin_api_token on the server). It is kept in sessionStorage for this tab only.
+    window.__youpiAdminAuth = (function () {
+      const KEY = 'youpi_admin_token';
+      const nativeFetch = window.fetch.bind(window);
+      let pending = null;
+
+      const read = () => { try { return sessionStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+      const write = (t) => { try { sessionStorage.setItem(KEY, t); } catch (e) {} };
+      const clear = () => { try { sessionStorage.removeItem(KEY); } catch (e) {} };
+
+      function isProtected(url) {
+        return /\/api\/v1\/admin\//.test(url) && !/\/admin\/sms-gateway\/download-apk/.test(url);
+      }
+
+      function prompt(message) {
+        if (pending) return pending;
+        pending = new Promise((resolve) => {
+          const overlay = document.createElement('div');
+          overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.85);display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,sans-serif';
+          const box = document.createElement('form');
+          box.style.cssText = 'background:#fff;color:#0f172a;border-radius:12px;padding:24px;max-width:420px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.4)';
+          const title = document.createElement('h3');
+          title.textContent = 'Admin token required';
+          title.style.margin = '0 0 8px';
+          const hint = document.createElement('p');
+          hint.textContent = message || 'Enter the admin API token (ADMIN_API_TOKEN, or the contents of data/.secrets/admin_api_token on the server).';
+          hint.style.cssText = 'margin:0 0 12px;font-size:14px;color:#475569';
+          const input = document.createElement('input');
+          input.type = 'password';
+          input.autocomplete = 'off';
+          input.required = true;
+          input.style.cssText = 'width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:12px';
+          const btn = document.createElement('button');
+          btn.type = 'submit';
+          btn.textContent = 'Unlock';
+          btn.style.cssText = 'width:100%;padding:10px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer';
+          box.append(title, hint, input, btn);
+          overlay.appendChild(box);
+          document.body.appendChild(overlay);
+          input.focus();
+          box.addEventListener('submit', (ev) => {
+            ev.preventDefault();
+            write(input.value.trim());
+            overlay.remove();
+            pending = null;
+            resolve();
+          });
+        });
+        return pending;
+      }
+
+      async function authedFetch(input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (!isProtected(url)) return nativeFetch(input, init);
+        if (!read()) {
+          await prompt();
+          if (typeof connectAdminEventsSse === 'function') connectAdminEventsSse();
+        }
+        const attempt = () => {
+          const headers = new Headers((init && init.headers) || (input && input.headers) || {});
+          headers.set('Authorization', 'Bearer ' + read());
+          return nativeFetch(input, Object.assign({}, init, { headers }));
+        };
+        let res = await attempt();
+        if (res.status === 401) {
+          clear();
+          await prompt('That token was rejected. Enter the admin API token again.');
+          res = await attempt();
+          if (res.ok && typeof connectAdminEventsSse === 'function') connectAdminEventsSse();
+        }
+        return res;
+      }
+
+      window.fetch = authedFetch;
+      return { token: read, ensure: () => (read() ? Promise.resolve() : prompt()) };
+    })();
+
     const API_BASE = "{{API_BASE_URL}}";
     let currentEnvMode = 'localhost';
     let currentDomainPrefix = 'pay';
@@ -5019,7 +5098,7 @@
 
     // --- GMAIL DIRECT API & AUTOMATED GOOGLE LOGIN ---
     function copyGmailRedirectUri() {
-      const uri = document.getElementById('gmailRedirectUriInput')?.value || 'https://pay-gmail.gauravtesting.online/oauth/callback';
+      const uri = document.getElementById('gmailRedirectUriInput')?.value || 'http://localhost:6003/oauth/callback';
       navigator.clipboard.writeText(uri).then(() => {
         showAdminToast('Redirect URI copied to clipboard!');
       });
@@ -5149,7 +5228,7 @@
         if (document.getElementById('gmailClientSecretInput')) document.getElementById('gmailClientSecretInput').value = cfg.clientSecret || data.clientSecret || '';
         if (document.getElementById('gmailRefreshTokenInput')) document.getElementById('gmailRefreshTokenInput').value = cfg.refreshToken || '';
 
-        const redirectUri = data.redirectUri || 'https://pay-gmail.gauravtesting.online/oauth/callback';
+        const redirectUri = data.redirectUri || 'http://localhost:6003/oauth/callback';
         if (document.getElementById('gmailRedirectUriInput')) document.getElementById('gmailRedirectUriInput').value = redirectUri;
         if (document.getElementById('guideProdUri')) document.getElementById('guideProdUri').textContent = redirectUri;
 
@@ -5436,7 +5515,10 @@
 
     function connectAdminEventsSse() {
       try {
-        const adminSse = new EventSource(`${API_BASE}/api/v1/admin/stream`);
+        // EventSource cannot send an Authorization header, so the stream accepts ?token= (GET only).
+        if (!window.__youpiAdminAuth.token()) return; // reconnected right after the token is entered
+        if (window.__adminSse) { try { window.__adminSse.close(); } catch (e) {} }
+        const adminSse = window.__adminSse = new EventSource(`${API_BASE}/api/v1/admin/stream?token=${encodeURIComponent(window.__youpiAdminAuth.token())}`);
         adminSse.addEventListener('counter_payment_requested', (event) => {
           pollGlobalCounterPending();
           fetchLiveData();

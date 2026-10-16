@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { getCoinStoreWebhookSecret, LEGACY_DEFAULT_WEBHOOK_SECRET } from '@youpi/common';
 import { getDatabase } from './database.js';
 import { MerchantRepository } from './repositories/merchant.repository.js';
 import { ReceivingAccountRepository } from './repositories/receiving-account.repository.js';
@@ -19,7 +20,8 @@ export function runMigrations(targetDb) {
   const schemaPath = path.join(__dirname, 'sqlite-schema.sql');
   const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 
-  // Detect if customers table has obsolete schema (phone_number/merchant_id instead of email/mobile_number or password_hash NOT NULL)
+  // Detect if customers table has an obsolete schema (phone_number/merchant_id instead of email/mobile_number, or password_hash NOT NULL).
+  // The old table is only rebuilt when it holds no customers: a schema mismatch must never destroy customer data.
   try {
     const tableInfo = db.query ? db.query("PRAGMA table_info(customers)") : [];
     const colNames = (tableInfo || []).map(c => c.name);
@@ -31,18 +33,18 @@ export function runMigrations(targetDb) {
       tableInfo.some(c => c.name === 'password_hash' && c.notnull === 1)
     );
     if (hasOldColumns) {
-      try { db.exec("PRAGMA foreign_keys = OFF;"); } catch {}
-      try { db.exec("UPDATE payment_sessions SET customer_id = NULL WHERE customer_id IS NOT NULL;"); } catch {}
-      try { db.exec("DELETE FROM ticket_messages;"); } catch {}
-      try { db.exec("DELETE FROM support_tickets;"); } catch {}
-      try { db.exec("DROP TABLE IF EXISTS customer_sessions;"); } catch {}
-      try { db.exec("DROP TABLE IF EXISTS customers;"); } catch {}
-      try { db.exec("PRAGMA foreign_keys = ON;"); } catch {}
+      const customerCount = Number(db.queryOne('SELECT COUNT(*) AS n FROM customers')?.n || 0);
+      if (customerCount === 0) {
+        try { db.exec("PRAGMA foreign_keys = OFF;"); } catch {}
+        try { db.exec("DROP TABLE IF EXISTS customer_sessions;"); } catch {}
+        try { db.exec("DROP TABLE IF EXISTS customers;"); } catch {}
+        try { db.exec("PRAGMA foreign_keys = ON;"); } catch {}
+      } else {
+        console.error(`[migrate] customers table has an obsolete schema but holds ${customerCount} row(s); leaving it untouched. Back up and migrate it manually.`);
+      }
     }
-  } catch {
-    try { db.exec("PRAGMA foreign_keys = OFF;"); } catch {}
-    try { db.exec("DROP TABLE IF EXISTS customers;"); } catch {}
-    try { db.exec("PRAGMA foreign_keys = ON;"); } catch {}
+  } catch (err) {
+    console.error('[migrate] Could not inspect customers table schema; skipping rebuild:', err.message);
   }
 
   // Fallback alter columns if customers/sessions table exists without new columns
@@ -117,7 +119,7 @@ export function runMigrations(targetDb) {
       contactEmail: 'merchant@youpi.local',
       contactPhone: '9876543210',
       webhookUrl: process.env.COIN_STORE_WEBHOOK_URL || 'http://localhost:5000/api/webhook',
-      webhookSecret: process.env.COIN_STORE_WEBHOOK_SECRET || 'merchant_webhook_secret_for_wallet_store',
+      webhookSecret: getCoinStoreWebhookSecret(),
       branding: {
         appName: 'YOUPI PG',
         primaryColor: '#2563eb',
@@ -129,8 +131,12 @@ export function runMigrations(targetDb) {
     if (!defaultMerchant.webhookSecret) {
       merchantRepo.update(defaultMerchant.id, {
         webhookUrl: 'http://localhost:5000/api/webhook',
-        webhookSecret: 'merchant_webhook_secret_for_wallet_store'
+        webhookSecret: getCoinStoreWebhookSecret()
       });
+    } else if (defaultMerchant.webhookSecret === LEGACY_DEFAULT_WEBHOOK_SECRET) {
+      // Older installs were seeded with a publicly known secret: rotate it.
+      merchantRepo.update(defaultMerchant.id, { webhookSecret: getCoinStoreWebhookSecret() });
+      console.warn('[migrate] Rotated the default merchant webhook secret away from the legacy public value. Update your merchant webhook verifier.');
     }
   }
 

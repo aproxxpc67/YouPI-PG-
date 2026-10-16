@@ -30,6 +30,7 @@ import {
 import { startServer as startPaymentApi } from '../../../../apps/payment-api/src/index.js';
 import { CoinWalletStoreServer } from '../../../../apps/coin-wallet-store/src/server.js';
 import { YoupiPaymentClient } from '@youpi/merchant-sdk';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix', async () => {
   const testDb = new Database({ inMemory: true });
@@ -88,6 +89,7 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
       const postData = body ? JSON.stringify(body) : null;
       const reqHeaders = {
         'Content-Type': 'application/json',
+        ...authHeadersFor(url),
         ...headers
       };
       if (postData) {

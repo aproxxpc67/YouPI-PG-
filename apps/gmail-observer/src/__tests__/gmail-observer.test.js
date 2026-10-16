@@ -5,7 +5,8 @@ import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../../../payment-api/src/index.js';
 import { startGmailObserver } from '../index.js';
 import { BankEmailParser } from '../parser.js';
-import { PaymentStatus } from '@youpi/common';
+import { PaymentStatus, createOAuthState } from '@youpi/common';
+import { TEST_OBSERVER_TOKEN } from '../../../../scripts/test-support.js';
 
 describe('Gmail Payment Observer Integration Tests', () => {
   let apiInstance;
@@ -29,9 +30,9 @@ describe('Gmail Payment Observer Integration Tests', () => {
     testDb.close();
   });
 
-  function get(path) {
+  function get(path, headers = {}) {
     return new Promise((resolve, reject) => {
-      http.get(`${gmailBaseUrl}${path}`, res => {
+      http.get(`${gmailBaseUrl}${path}`, { headers }, res => {
         let data = '';
         res.on('data', chunk => { data += chunk; });
         res.on('end', () => {
@@ -91,12 +92,31 @@ describe('Gmail Payment Observer Integration Tests', () => {
       assert.equal(json.service, 'gmail-observer');
     });
 
-    test('GET /oauth/url returns valid Google OAuth URL', async () => {
-      const res = await get('/oauth/url');
+    test('GET /oauth/url requires a token and returns a Google OAuth URL carrying a signed state', async () => {
+      assert.equal((await get('/oauth/url')).status, 401);
+
+      const res = await get('/oauth/url', { Authorization: `Bearer ${TEST_OBSERVER_TOKEN}` });
       assert.equal(res.status, 200);
       const json = JSON.parse(res.text);
       assert.ok(json.authUrl.includes('accounts.google.com/o/oauth2/v2/auth'));
       assert.ok(json.authUrl.includes('gmail.readonly'));
+      assert.ok(new URL(json.authUrl).searchParams.get('state'));
+      assert.ok(!json.redirectUri.includes('gauravtesting'));
+    });
+
+    test('GET /oauth/callback rejects a missing, forged or reused state', async () => {
+      const bad = await get('/oauth/callback?code=abc');
+      assert.equal(bad.status, 400);
+      assert.ok(bad.text.includes('Invalid or expired OAuth state'));
+
+      const forged = await get('/oauth/callback?code=abc&state=aaaa.9999999999999.bbbb');
+      assert.ok(forged.text.includes('Invalid or expired OAuth state'));
+
+      const state = createOAuthState();
+      const first = await get(`/oauth/callback?code=abc&state=${encodeURIComponent(state)}`);
+      assert.ok(!first.text.includes('Invalid or expired OAuth state')); // passes the state check, fails later (no credentials)
+      const replay = await get(`/oauth/callback?code=abc&state=${encodeURIComponent(state)}`);
+      assert.ok(replay.text.includes('Invalid or expired OAuth state'));
     });
 
     test('End-to-End: processing bank email confirms active payment session in Payment API', async () => {

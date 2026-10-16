@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { HttpServer } from '../server.js';
-import { PaymentStatus, PaymentMethod, SellingMode, AuditActorType, isValidVpa, toRupeesString, deriveCloudflareRoutes, resolveRuntimeUrls } from '@youpi/common';
+import { PaymentStatus, PaymentMethod, SellingMode, AuditActorType, isValidVpa, toRupeesString, deriveCloudflareRoutes, resolveRuntimeUrls, resolveGmailRedirectUri, createOAuthState } from '@youpi/common';
 import { PaymentVerificationPipeline } from '@youpi/core';
 import { globalTunnelManager } from '../services/tunnel-manager.js';
 import { formatQrDataUrl } from '../services/whatsapp-berry.service.js';
@@ -274,6 +274,17 @@ export function registerAdminRoutes(server, ctx) {
     const session = ctx.sessionRepo.findById(paymentId);
     if (!session) {
       HttpServer.json(res, 404, { error: `Payment session not found: ${paymentId}` });
+      return;
+    }
+
+    // Manual confirmation is only valid for counter payments still awaiting settlement.
+    // A UPI session must only reach SUCCESS through the verification engine.
+    if (session.method !== PaymentMethod.CASH_COUNTER && session.method !== PaymentMethod.CARD_COUNTER) {
+      HttpServer.json(res, 400, { error: `Manual confirmation is only allowed for counter payments (session method is '${session.method}').` });
+      return;
+    }
+    if ([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED].includes(session.status)) {
+      HttpServer.json(res, 409, { error: `Cannot confirm a payment in terminal status '${session.status}'.` });
       return;
     }
 
@@ -1418,7 +1429,7 @@ export function registerAdminRoutes(server, ctx) {
     const branding = merchant?.branding || {};
     const gmailConfig = branding.gmailConfig || {};
 
-    const redirectUri = 'https://pay-gmail.gauravtesting.online/oauth/callback';
+    const redirectUri = resolveGmailRedirectUri(branding);
     const hasToken = Boolean(gmailConfig.refreshToken && gmailConfig.refreshToken.trim());
 
     HttpServer.json(res, 200, {
@@ -1461,9 +1472,9 @@ export function registerAdminRoutes(server, ctx) {
       });
       return;
     }
-    const redirectUri = 'https://pay-gmail.gauravtesting.online/oauth/callback';
+    const redirectUri = resolveGmailRedirectUri(branding);
     const scopes = encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email');
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent&include_granted_scopes=true`;
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${encodeURIComponent(createOAuthState())}`;
 
     HttpServer.json(res, 200, {
       success: true,

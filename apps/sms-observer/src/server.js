@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { hasBearer, getObserverToken, getAdminToken } from '@youpi/common';
 import { SmsObserverService } from './sms-service.js';
 import { GoogleMessagesAutomator } from './browser-automator.js';
 
@@ -105,6 +106,12 @@ export class SmsObserverServer {
 
       // POST /process-sms (Direct SMS intake / Google Messages Web bridge)
       if (pathname === '/process-sms' && req.method === 'POST') {
+        // Direct ingestion feeds the payment pipeline: only the local operator/test tooling may call it.
+        if (!hasBearer(req, getObserverToken(), getAdminToken())) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
         let body = '';
         req.on('data', chunk => { body += chunk; });
         req.on('end', async () => {

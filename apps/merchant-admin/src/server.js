@@ -43,7 +43,6 @@ export class AdminServer {
     // This completely eliminates CORS errors, tunnel downtime 530s, and cross-origin failures.
     const clientApiBase = '';
     html = html.replaceAll('{{API_BASE_URL}}', clientApiBase);
-    html = html.replaceAll('{{ANDROID_ENROLLMENT_SECRET}}', process.env.ANDROID_ENROLLMENT_SECRET || 'android_pairing_enrollment_secret_key_32_chars');
     return html;
   }
 

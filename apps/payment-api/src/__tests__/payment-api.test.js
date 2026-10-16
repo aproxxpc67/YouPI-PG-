@@ -4,6 +4,7 @@ import http from 'node:http';
 import { Database } from '@youpi/db';
 import { startServer } from '../index.js';
 import { PaymentStatus, ObserverSource, verifyHmac } from '@youpi/common';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('Payment API End-to-End HTTP Integration Tests', () => {
   let serverInstance;
@@ -27,7 +28,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       const url = new URL(path, baseUrl);
       const reqOpts = {
         method: options.method || 'GET',
-        headers: options.headers || {}
+        headers: authHeadersFor(path, options.headers || {})
       };
 
       const req = http.request(url, reqOpts, res => {
@@ -613,7 +614,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         body: {
           orderId: 'WEBHOOK-TEST-ORD-1',
           amount: '450.00',
-          autoActivate: true
+          method: 'CASH_COUNTER'
         }
       });
       assert.equal(createRes.status, 201);

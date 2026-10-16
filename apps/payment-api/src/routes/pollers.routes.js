@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpServer } from '../server.js';
 import { ObservationNormalizer, BankSmsParser, BankEmailParser, generateQrSvg } from '@youpi/core';
-import { toRupeesString, toPaise, verifyHmac, resolveRuntimeUrls } from '@youpi/common';
+import { toRupeesString, toPaise, verifyHmac, resolveRuntimeUrls, resolveSecret, safeEqual } from '@youpi/common';
+import { isAdminRequest } from '../auth-guard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,7 +24,8 @@ const __dirname = path.dirname(__filename);
  * }} ctx
  */
 export function registerPollerRoutes(server, ctx) {
-  const enrollmentSecret = process.env.ANDROID_ENROLLMENT_SECRET || 'android_pairing_enrollment_secret_key_32_chars';
+  // No public fallback: env value, else a random secret persisted in data/.secrets/.
+  const enrollmentSecret = resolveSecret('android_enrollment_secret', 'ANDROID_ENROLLMENT_SECRET');
 
   // GET /api/v1/pollers/active-window (Enables deep intelligent DOM scanning for active amounts and dual-layer verification)
   server.get('/api/v1/pollers/active-window', async (req, res) => {
@@ -73,8 +75,9 @@ export function registerPollerRoutes(server, ctx) {
         sender,
         receivingAccountId: body.receivingAccountId,
         paymentSessionId: body.paymentSessionId,
-        isTest: Boolean(body.isTest),
-        testModeActive: Boolean(body.testModeActive)
+        // Test flags relax verification: honour them only for the admin credential, never for observers.
+        isTest: Boolean(body.isTest) && isAdminRequest(req),
+        testModeActive: Boolean(body.testModeActive) && isAdminRequest(req)
       });
 
       if (pipeResult.status === 'REJECTED' && pipeResult.failingCondition === 'FRAUDULENT_PAYMENT_INJECTION') {
@@ -151,7 +154,7 @@ export function registerPollerRoutes(server, ctx) {
     const deviceModel = body.deviceModel || 'Android Device';
 
     // Verify enrollment token against system secret or merchant token
-    if (!token || (token !== enrollmentSecret && token !== `pair_${merchantId.slice(0, 8)}` && token !== 'youpi_sms_pair_token_secure')) {
+    if (!token || !safeEqual(String(token), enrollmentSecret)) {
       HttpServer.json(res, 401, { error: 'Invalid or expired device pairing enrollment token.' });
       return;
     }
@@ -231,11 +234,17 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
-    // Verify HMAC Signature & Replay Drift Protection if headers are present
+    // Verify HMAC Signature & Replay Drift Protection
     const timestampStr = req.headers['x-timestamp'];
     const signature = req.headers['x-signature'];
 
-    if (timestampStr && signature && device.signing_key_hash) {
+    // Signature is mandatory: omitting the headers must not skip verification.
+    if (!device.signing_key_hash || !timestampStr || !signature) {
+      HttpServer.json(res, 401, { error: 'Missing X-Timestamp / X-Signature headers.' });
+      return;
+    }
+
+    {
       const ts = Number(timestampStr);
       const now = Date.now();
       if (isNaN(ts) || Math.abs(now - ts) > 60000) {
@@ -296,7 +305,7 @@ export function registerPollerRoutes(server, ctx) {
         sender: body.sender || req.headers['x-sender'],
         receivingAccountId,
         paymentSessionId: body.paymentSessionId,
-        isTest: Boolean(body.isTest),
+        isTest: false, // device-supplied flags must never relax verification
         deviceInfo: device ? `${device.device_name} (${device.device_model})` : 'Android SMS Gateway'
       });
 

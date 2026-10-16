@@ -1,4 +1,5 @@
 import { PaymentObserverClient } from '@youpi/observer-sdk';
+import { getObserverToken } from '@youpi/common';
 import { BankEmailParser } from './parser.js';
 
 function extractBodyFromGmailPayload(payload) {
@@ -68,7 +69,7 @@ export class GmailPoller {
 
   async fetchCredentialsFromPaymentApi() {
     try {
-      const res = await fetch(`${this.apiBaseUrl}/api/v1/admin/gmail/credentials`);
+      const res = await fetch(`${this.apiBaseUrl}/api/v1/admin/gmail/credentials`, { headers: { Authorization: `Bearer ${getObserverToken()}` } });
       if (res.ok) {
         const data = await res.json();
         const conf = data.gmailConfig || data;

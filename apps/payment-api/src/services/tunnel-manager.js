@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { buildCloudflaredInvocation } from '@youpi/common';
 
 /**
  * Cloudflare Tunnel Process Manager
@@ -32,7 +33,7 @@ export class TunnelManager extends EventEmitter {
   getStatus() {
     return {
       status: this.status,
-      command: this.command,
+      command: this.command, // redacted: never contains the token
       pid: this.pid,
       startedAt: this.startedAt,
       isRunning: this.status === 'RUNNING' || this.status === 'STARTING',
@@ -49,19 +50,16 @@ export class TunnelManager extends EventEmitter {
       this.stop();
     }
 
-    const trimmed = rawCommand.trim();
-    this.command = trimmed;
+    // Only the extracted token is used; the pasted text is never run through a shell.
+    const invocation = buildCloudflaredInvocation(rawCommand);
+    this.command = invocation.redacted;
     this.status = 'STARTING';
     this.startedAt = new Date().toISOString();
-    this.appendLog(`[TunnelManager] Launching tunnel command: ${trimmed}`);
+    this.appendLog(`[TunnelManager] Launching tunnel: ${invocation.redacted}`);
 
     try {
-      // Execute via shell (cmd.exe on Windows / sh on Unix) so tokens, flags, and paths execute cleanly
-      const isWindows = process.platform === 'win32';
-      const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
-      const shellArgs = isWindows ? ['/c', trimmed] : ['-c', trimmed];
-
-      const child = spawn(shell, shellArgs, {
+      const child = spawn(invocation.file, invocation.args, {
+        shell: false,
         detached: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env }

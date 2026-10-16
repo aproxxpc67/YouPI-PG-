@@ -159,6 +159,8 @@ The frontend script emits normalized DOM `CustomEvent`s on `window`:
 }
 ```
 
+> **PAYMENT METHOD RULE**: `event: "SUCCESS"` is also sent when a customer places a **Cash on Delivery** order (`method: "COD"`) or a counter payment is confirmed (`CASH_COUNTER` / `CARD_COUNTER`). For `COD` no money has been received yet. Always check `payload.method` before you treat an order as **paid**: fulfil prepaid goods only when `method` is `UPI` (or a counter method your till has confirmed), and route `COD` orders into your cash-on-delivery flow.
+
 ### Polyglot Webhook Verification Implementations:
 
 #### 1. Node.js (Express)
@@ -176,8 +178,8 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) =
   }
 
   const payload = JSON.parse(req.body.toString('utf8'));
-  if (payload.event === 'SUCCESS') {
-    // Authoritatively mark order as PAID in merchant database
+  if (payload.event === 'SUCCESS' && payload.method === 'UPI') {
+    // Authoritatively mark order as PAID in merchant database (COD: payload.method === 'COD' means "order placed", not paid)
     db.orders.markPaid(payload.orderId, {
       utr: payload.utr,
       amount: payload.amount,
@@ -207,8 +209,9 @@ async def youpi_webhook(request: Request):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = json.loads(raw_body.decode("utf-8"))
-    if payload.get("event") == "SUCCESS":
+    if payload.get("event") == "SUCCESS" and payload.get("method") == "UPI":
         # Authoritatively mark order as PAID: payload["orderId"], payload["utr"], payload["amount"]
+        # (method == "COD" means the order was placed and cash is due on delivery - not paid)
         pass
     return {"received": True}
 ```
@@ -228,8 +231,9 @@ if (!hash_equals($expected, $signature)) {
 }
 
 $payload = json_decode($rawPayload, true);
-if (($payload['event'] ?? '') === 'SUCCESS') {
+if (($payload['event'] ?? '') === 'SUCCESS' && ($payload['method'] ?? '') === 'UPI') {
     // Authoritatively mark order as PAID: $payload['orderId'], $payload['utr'], $payload['amount']
+    // ($payload['method'] === 'COD' means the order was placed and cash is due on delivery - not paid)
 }
 
 http_response_code(200);
@@ -277,9 +281,11 @@ func youpiWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		UTR         string `json:"utr"`
 		Amount      string `json:"amount"`
 		AmountPaise int64  `json:"amountPaise"`
+		Method      string `json:"method"`
 	}
-	if err := json.Unmarshal(rawBody, &payload); err == nil && payload.Event == "SUCCESS" {
+	if err := json.Unmarshal(rawBody, &payload); err == nil && payload.Event == "SUCCESS" && payload.Method == "UPI" {
 		// Authoritatively mark order as PAID: payload.OrderId, payload.UTR, payload.Amount
+		// (Method == "COD" means the order was placed and cash is due on delivery - not paid)
 	}
 
 	w.WriteHeader(http.StatusOK)

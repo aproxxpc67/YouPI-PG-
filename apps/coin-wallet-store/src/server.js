@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { YoupiPaymentClient } from '@youpi/merchant-sdk';
+import { getCoinStoreWebhookSecret } from '@youpi/common';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,7 +30,10 @@ export class CoinWalletStoreServer {
     const internalPort = process.env.PAYMENT_API_PORT || 6100;
     this.gatewayApiUrl = options.gatewayApiUrl || process.env.PAYMENT_API_INTERNAL_URL || `http://127.0.0.1:${internalPort}`;
     this.merchantId = options.merchantId || '00000000-0000-0000-0000-000000000001';
-    this.webhookSecret = options.webhookSecret || 'merchant_webhook_secret_for_wallet_store';
+    this.webhookSecret = options.webhookSecret || getCoinStoreWebhookSecret();
+
+    // orderId -> gateway paymentId for orders this store created (used to verify payments server-side)
+    this.orderPayments = new Map();
 
     this.paymentClient = new YoupiPaymentClient({
       apiUrl: this.gatewayApiUrl,
@@ -357,6 +361,8 @@ export class CoinWalletStoreServer {
               }
             });
 
+            this.orderPayments.set(orderId, payment.paymentId);
+
             // Normalize checkoutUrl for localhost development / testing to prevent tunnel offline issues
             let resolvedCheckoutUrl = payment.checkoutUrl;
             if (host.includes('localhost') || host.includes('127.0.0.1')) {
@@ -387,40 +393,47 @@ export class CoinWalletStoreServer {
         req.on('end', async () => {
           try {
             const data = JSON.parse(body || '{}');
-            const { paymentId, orderId, coins, packName } = data;
+            const { orderId: clientOrderId } = data;
+            const sendJson = (status, payload) => {
+              res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+              res.end(JSON.stringify(payload));
+            };
 
-            if (!orderId && !paymentId) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Missing orderId or paymentId' }));
+            // The payment id comes from the order this server created, never from the browser.
+            const paymentId = clientOrderId ? this.orderPayments.get(clientOrderId) : undefined;
+            if (!paymentId) {
+              sendJson(404, { error: 'Unknown order' });
               return;
             }
 
-            // Check if already credited
-            const alreadyCredited = this.transactionHistory.some(t => t.orderId === orderId);
-            if (alreadyCredited) {
-              res.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-              });
-              res.end(JSON.stringify({ success: true, coins: this.walletCoins, message: 'Already credited' }));
+            // Never trust the browser: ask the gateway whether this payment really succeeded,
+            // and take the order id and coin amount from the gateway session, not from the request.
+            let session;
+            try {
+              session = await this.paymentClient.getPayment(paymentId);
+            } catch (e) {
+              console.warn('[Coin Wallet Store] getPayment failed:', e.message);
+              sendJson(502, { error: 'Unable to verify payment with gateway' });
               return;
             }
 
-            // Verify with payment API if paymentId is available
-            let creditedCoins = Number(coins) || 100;
-            let finalPackName = packName || 'Coin Pack';
-
-            if (paymentId) {
-              try {
-                const session = await this.paymentClient.getPayment(paymentId);
-                if (session) {
-                  if (session.metadata?.coins) creditedCoins = Number(session.metadata.coins);
-                  if (session.metadata?.packName) finalPackName = session.metadata.packName;
-                }
-              } catch (e) {
-                console.warn('[Coin Wallet Store] getPayment check note:', e.message);
-              }
+            if (!session || session.status !== 'SUCCESS' || session.method !== 'UPI') {
+              sendJson(402, { error: 'Payment not completed', status: session?.status || 'UNKNOWN' });
+              return;
             }
+            if (clientOrderId && clientOrderId !== session.orderId) {
+              sendJson(400, { error: 'orderId does not match payment' });
+              return;
+            }
+
+            const orderId = session.orderId;
+            if (this.transactionHistory.some(t => t.orderId === orderId)) {
+              sendJson(200, { success: true, coins: this.walletCoins, message: 'Already credited' });
+              return;
+            }
+
+            const creditedCoins = Number(session.metadata?.coins) || 100;
+            const finalPackName = session.metadata?.packName || 'Coin Pack';
 
             this.creditCoins(orderId, creditedCoins, finalPackName);
             console.log(`[Coin Wallet Store] Verified & credited ${creditedCoins} coins for Order ${orderId}. New balance: ${this.walletCoins}`);
@@ -454,7 +467,9 @@ export class CoinWalletStoreServer {
             // Verify HMAC-SHA256 signature using merchant SDK
             const event = this.paymentClient.verifyWebhook(rawBody, signature);
 
-            if (event.event === 'SUCCESS' || event.status === 'SUCCESS') {
+            const paidMethod = event.method || event.data?.method;
+            // COD / counter 'SUCCESS' means an order was placed, not that money arrived.
+            if ((event.event === 'SUCCESS' || event.status === 'SUCCESS') && (!paidMethod || paidMethod === 'UPI')) {
               const orderId = event.orderId || event.data?.orderId;
               const alreadyCredited = this.transactionHistory.some(t => t.orderId === orderId);
               if (!alreadyCredited) {

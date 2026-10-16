@@ -327,7 +327,9 @@
       closeBtn.onclick = () => {
         try {
           if (iframe && iframe.contentWindow) {
-            iframe.contentWindow.postMessage({ event: 'youpi.request_cancel' }, '*');
+            if (this._iframeOrigin) {
+              iframe.contentWindow.postMessage({ event: 'youpi.request_cancel' }, this._iframeOrigin);
+            }
             return;
           }
         } catch (err) { }
@@ -338,6 +340,9 @@
       const iframe = document.createElement('iframe');
       iframe.className = 'youpi-checkout-iframe';
       iframe.src = targetUrl;
+      // Only messages from this exact iframe/origin are trusted (see _handleMessage).
+      this._iframe = iframe;
+      try { this._iframeOrigin = new URL(targetUrl, window.location.href).origin; } catch { this._iframeOrigin = null; }
       iframe.allow = 'payment';
 
       container.appendChild(closeBtn);
@@ -374,7 +379,19 @@
       backdrop.addEventListener('mouseup', stopOutsideDismiss, true);
     }
 
+    _isSafeRedirect(url) {
+      try {
+        const u = new URL(url, window.location.href);
+        return u.protocol === 'http:' || u.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    }
+
     _handleMessage(e) {
+      // Ignore messages from any window other than our checkout iframe (spoofed success events).
+      if (!this._iframe || e.source !== this._iframe.contentWindow) return;
+      if (!this._iframeOrigin || e.origin !== this._iframeOrigin) return;
       if (!e.data || typeof e.data !== 'object') return;
 
       const event = e.data.event;
@@ -439,7 +456,7 @@
           if (this.options.failedUrl) {
             const delim = this.options.failedUrl.includes('?') ? '&' : '?';
             window.location.href = `${this.options.failedUrl}${delim}order_id=${encodeURIComponent(result.order_id)}&reason=${encodeURIComponent(result.reason)}`;
-          } else if (payload.redirectUrl && payload.redirectUrl !== window.location.href && !payload.redirectUrl.includes('/checkout')) {
+          } else if (payload.redirectUrl && this._isSafeRedirect(payload.redirectUrl) && payload.redirectUrl !== window.location.href && !payload.redirectUrl.includes('/checkout')) {
             window.location.href = payload.redirectUrl;
           }
         });
@@ -498,7 +515,7 @@
           if (this.options.cancelledUrl) {
             const delim = this.options.cancelledUrl.includes('?') ? '&' : '?';
             window.location.href = `${this.options.cancelledUrl}${delim}order_id=${encodeURIComponent(this.options.orderId || '')}`;
-          } else if (redirectUrl && redirectUrl !== window.location.href && !redirectUrl.includes('/checkout')) {
+          } else if (redirectUrl && this._isSafeRedirect(redirectUrl) && redirectUrl !== window.location.href && !redirectUrl.includes('/checkout')) {
             window.location.href = redirectUrl;
           }
         });

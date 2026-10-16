@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { HttpServer } from '../server.js';
 import { normalizeEmail, normalizeMobile, isValidEmail, isValidMobile, isValidPassword } from '@youpi/common';
 
@@ -112,7 +113,7 @@ export function registerCustomerRoutes(server, ctx) {
     }
 
     // Generate 6-digit cryptographic OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpCode = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     if (existingUser) {
@@ -138,17 +139,18 @@ export function registerCustomerRoutes(server, ctx) {
         console.warn(`[CustomerAuth] WhatsApp dispatch notice: ${err.message}`);
       }
     } else {
-      console.log(`[CustomerAuth] Berry service not loaded. Simulated OTP for ${cleanMobile}: ${otpCode}`);
+      console.log(`[CustomerAuth] Berry service not loaded; OTP for ${cleanMobile} was not delivered.`);
     }
 
-    console.log(`[CustomerAuth] OTP generated for +91${cleanMobile}: ${otpCode} (Expires: 5 mins)`);
+    console.log(`[CustomerAuth] OTP generated for +91${cleanMobile} (expires in 5 mins)`);
 
     HttpServer.json(res, 200, {
       success: true,
       message: 'OTP sent to your WhatsApp number.',
       mobileNumber: cleanMobile,
       expiresInSeconds: 300,
-      devOtp: (process.env.NODE_ENV !== 'production' ? otpCode : undefined),
+      // Returning the OTP lets anyone log in as any number: only on explicit opt-in, never in production.
+      devOtp: (process.env.YOUPI_EXPOSE_DEV_OTP === 'true' && process.env.NODE_ENV !== 'production' ? otpCode : undefined),
       dispatch: dispatchResult
     });
   });

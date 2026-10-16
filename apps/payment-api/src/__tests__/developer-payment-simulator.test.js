@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, CustomerSessionRepository, PaymentSessionRepository, MerchantRepository } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite', () => {
   let apiInstance;
@@ -44,7 +45,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       const url = new URL(path, baseUrl);
       const headers = {
         'Content-Type': 'application/json',
-        ...(options.headers || {})
+        ...authHeadersFor(path), ...(options.headers || {})
       };
       if (options.merchantAuth !== false && !headers['x-merchant-id']) {
         headers['x-merchant-id'] = merchantId;
@@ -104,7 +105,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(unauthRes.status, 401);
     assert.equal(unauthRes.body.success, false);
 
-    // 2. Customer token without merchant auth -> 403
+    // 2. A customer session token is not an admin credential -> 401
     const cust = customerRepo.create({
       merchantId,
       name: 'Regular Customer',
@@ -122,8 +123,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
         'Authorization': `Bearer ${custToken}`
       }
     });
-    assert.equal(custRes.status, 403);
-    assert.equal(custRes.body.success, false);
+    assert.equal(custRes.status, 401);
   });
 
   test('1, 2, 3. Developer can search existing customer, list sessions, and identify active session', async () => {

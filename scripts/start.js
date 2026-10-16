@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { runMigrations } from '../packages/db/src/migrate.js';
 import { startControlCenter } from '../apps/control-center/src/index.js';
 import { resolveRuntimeUrls } from '../packages/common/src/runtime-config.js';
+import { startCloudflaredSafely } from '../packages/common/src/tunnel-command.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,15 +69,8 @@ const tunnelCmd = process.env.CLOUDFLARE_TUNNEL_COMMAND || branding.cloudflareTu
 
 if (tunnelCmd && tunnelCmd.trim()) {
   console.log(`[☁️ Cloudflare Tunnel] Executing tunnel command before starting services:`);
-  console.log(`   > ${tunnelCmd.trim()}`);
-  const isWindows = process.platform === 'win32';
-  const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
-  const shellArgs = isWindows ? ['/c', tunnelCmd.trim()] : ['-c', tunnelCmd.trim()];
-  tunnelProcess = spawn(shell, shellArgs, {
-    stdio: 'inherit',
-    env: { ...process.env }
-  });
-  console.log(`[✓] Cloudflare Tunnel process launched (PID: ${tunnelProcess.pid}).\n`);
+  tunnelProcess = startCloudflaredSafely(tunnelCmd, { stdio: 'inherit' });
+  if (tunnelProcess) console.log(`[✓] Cloudflare Tunnel process launched (PID: ${tunnelProcess.pid}).\n`);
   await new Promise(r => setTimeout(r, 1500));
 }
 

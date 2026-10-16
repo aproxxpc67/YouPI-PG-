@@ -6,6 +6,7 @@ import { startServer as startPaymentApi } from '../../../payment-api/src/index.j
 import { startSmsObserver } from '../index.js';
 import { BankSmsParser } from '../sms-parser.js';
 import { PaymentStatus } from '@youpi/common';
+import { TEST_OBSERVER_TOKEN } from '../../../../scripts/test-support.js';
 
 describe('Google Messages / SMS Payment Observer Integration Tests', () => {
   let apiInstance;
@@ -40,6 +41,26 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
       }).on('error', reject);
     });
   }
+
+  describe('Direct ingestion endpoint', () => {
+    const post = (headers) => new Promise((resolve, reject) => {
+      const req = http.request(`${smsBaseUrl}/process-sms`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers } }, res => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ text: 'Rs 500 credited UTR 612345678901', sender: 'HDFCBK' }));
+    });
+
+    test('POST /process-sms rejects anonymous and wrong-token callers', async () => {
+      assert.equal(await post({}), 401);
+      assert.equal(await post({ Authorization: 'Bearer wrong' }), 401);
+    });
+
+    test('POST /process-sms accepts the observer token', async () => {
+      assert.notEqual(await post({ Authorization: `Bearer ${TEST_OBSERVER_TOKEN}` }), 401);
+    });
+  });
 
   describe('Bank SMS Parser', () => {
     test('correctly parses credit SMS with amount, UTR, and sender VPA', () => {

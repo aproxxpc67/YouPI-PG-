@@ -4,6 +4,7 @@ import http from 'node:http';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
   let apiInstance;
@@ -60,7 +61,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
           method: options.method || 'GET',
           headers: {
             'Content-Type': 'application/json',
-            ...(options.headers || {})
+            ...authHeadersFor(path), ...(options.headers || {})
           }
         },
         res => {

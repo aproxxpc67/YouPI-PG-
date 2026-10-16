@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, PaymentSessionRepository, MerchantRepository } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   let apiInstance;
@@ -37,7 +38,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
         headers: {
           'Content-Type': 'application/json',
           'x-merchant-id': merchantId,
-          ...(options.headers || {})
+          ...authHeadersFor(path), ...(options.headers || {})
         }
       }, res => {
         let data = '';

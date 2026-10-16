@@ -1,4 +1,5 @@
 import { AndroidObserverDriver } from './driver.js';
+import { resolveSecret } from '@youpi/common';
 
 /**
  * Android Notification Push Simulator CLI.
@@ -7,7 +8,7 @@ import { AndroidObserverDriver } from './driver.js';
  */
 
 const API_BASE = process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
-const ENROLLMENT_SECRET = process.env.ANDROID_ENROLLMENT_SECRET || 'android_pairing_enrollment_secret_key_32_chars';
+const ENROLLMENT_SECRET = resolveSecret('android_enrollment_secret', 'ANDROID_ENROLLMENT_SECRET');
 
 async function main() {
   console.log('========================================================');

@@ -375,7 +375,7 @@ export class WhatsAppBerryService extends EventEmitter {
       this.pairingCode = code;
       this.pairingPhone = phoneNumber;
       this.status = 'PAIRING_CODE_READY';
-      console.log(`[WhatsAppBerryService] WhatsApp 8-digit Pairing Code generated: ${code} for phone ${phoneNumber}`);
+      console.log(`[WhatsAppBerryService] WhatsApp 8-digit pairing code generated for phone ${phoneNumber}.`);
       this.emit('pairing_code', { code, phoneNumber });
       this.emit('status', this.status);
     });
@@ -657,7 +657,7 @@ export class WhatsAppBerryService extends EventEmitter {
     }
 
     if (this.isSimulatedMode) {
-      console.log(`[WhatsAppBerryService] Simulated WhatsApp message to ${to}: "${message.slice(0, 50)}..."`);
+      console.log(`[WhatsAppBerryService] Simulated WhatsApp message to ${to} (${message.length} chars; body not logged).`);
       return {
         success: true,
         delivered: true,

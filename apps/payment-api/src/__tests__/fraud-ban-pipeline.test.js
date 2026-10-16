@@ -5,6 +5,7 @@ import { Database, CustomerRepository, PaymentSessionRepository, MerchantReposit
 import { extractIntelligentAmount, BankSmsParser, PaymentVerificationPipeline } from '@youpi/core';
 import { startServer as startPaymentApi } from '../index.js';
 import { PaymentStatus, PaymentMethod } from '@youpi/common';
+import { authHeadersFor } from '../../../../scripts/test-support.js';
 
 describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acceptance Tests)', () => {
   let apiInstance;
@@ -54,7 +55,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
         headers: {
           'Content-Type': 'application/json',
           'x-merchant-id': merchantId,
-          ...(options.headers || {})
+          ...authHeadersFor(path), ...(options.headers || {})
         }
       }, res => {
         let data = '';

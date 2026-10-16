@@ -1201,8 +1201,9 @@ export function registerCheckoutRoutes(server, ctx) {
       return;
     }
 
-    if ([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED].includes(session.status)) {
-      HttpServer.json(res, 400, { error: `Cannot place COD order for terminal session in status '${session.status}'` });
+    // PROCESSING = a UPI payment was already detected and is being verified; switching it to COD would drop that payment.
+    if ([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED, PaymentStatus.PROCESSING].includes(session.status)) {
+      HttpServer.json(res, 400, { error: `Cannot place COD order for session in status '${session.status}'` });
       return;
     }
 

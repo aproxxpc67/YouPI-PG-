@@ -19,6 +19,7 @@ data/berry_auth/
 data/test_berry_auth/
 data/backups/
 data/whatsapp_session.json
+data/.secrets/
 berrysdk.db*
 .berry-sessions/
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPaymentApp } from '../index.js';
 import { Database } from '@youpi/db';
+import { authFetch } from '../../../../scripts/test-support.js';
 
 test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite', async (t) => {
   const customDb = new Database({ inMemory: true });
@@ -20,7 +21,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   const apiBase = `http://localhost:${testPort}`;
 
   await t.test('1. POST /api/v1/customer/check-user identifies new unregistered mobile', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/check-user`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/check-user`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobileNumber: '9123456789' })
@@ -34,7 +35,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('2. POST /api/v1/customer/check-user rejects malformed phone numbers', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/check-user`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/check-user`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobileNumber: '123' })
@@ -47,7 +48,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   let signupOtp = null;
 
   await t.test('3. POST /api/v1/customer/send-otp creates challenge for new customer signup', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/send-otp`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/send-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -67,7 +68,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('4. POST /api/v1/customer/verify-otp rejects incorrect OTP code', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/verify-otp`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -84,7 +85,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   let customerId = null;
 
   await t.test('5. POST /api/v1/customer/verify-otp completes signup and issues session token', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/verify-otp`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -105,7 +106,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('6. POST /api/v1/customer/check-user detects now-existing customer', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/check-user`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/check-user`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobileNumber: '9123456789' })
@@ -120,7 +121,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   let loginOtp = null;
 
   await t.test('7. POST /api/v1/customer/send-otp dispatches WhatsApp OTP for existing user', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/send-otp`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/send-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobileNumber: '9123456789' })
@@ -133,7 +134,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('8. POST /api/v1/customer/verify-otp logs in existing user', async () => {
-    const res = await fetch(`${apiBase}/api/v1/customer/verify-otp`, {
+    const res = await authFetch(`${apiBase}/api/v1/customer/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -149,7 +150,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('9. Merchant WhatsApp status API responds with BerryProtocol metadata', async () => {
-    const res = await fetch(`${apiBase}/api/v1/admin/whatsapp/status`);
+    const res = await authFetch(`${apiBase}/api/v1/admin/whatsapp/status`);
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.success, true);
@@ -158,7 +159,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('10. Merchant WhatsApp reconnect API triggers pairing QR code generation', async () => {
-    const res = await fetch(`${apiBase}/api/v1/admin/whatsapp/reconnect`, {
+    const res = await authFetch(`${apiBase}/api/v1/admin/whatsapp/reconnect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -169,7 +170,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('11. Merchant WhatsApp pairing-code API accepts phone and returns 8-digit code', async () => {
-    const res = await fetch(`${apiBase}/api/v1/admin/whatsapp/pairing-code`, {
+    const res = await authFetch(`${apiBase}/api/v1/admin/whatsapp/pairing-code`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phoneNumber: '918796266491' })
@@ -181,7 +182,7 @@ test('WhatsApp Berry Protocol OTP Customer Auth & Merchant Configuration Suite',
   });
 
   await t.test('12. Merchant WhatsApp disconnect API safely clears session', async () => {
-    const res = await fetch(`${apiBase}/api/v1/admin/whatsapp/disconnect`, {
+    const res = await authFetch(`${apiBase}/api/v1/admin/whatsapp/disconnect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
