@@ -1,4 +1,4 @@
-import { PaymentStatus, ObservationAttributionStatus, TicketStatus, SenderType } from '@youpi/common';
+import { PaymentStatus, ObservationAttributionStatus, TicketStatus, SenderType, isTerminalStatus } from '@youpi/common';
 
 export class AttributionEngine {
   /**
@@ -79,6 +79,55 @@ export class AttributionEngine {
       // If observation came from a NEW, DIFFERENT channel and payment was already attributed:
       // Upgrade verification tier to Level 2 (Dual Verification)!
       if (existing.attributedPaymentId) {
+        const targetSession = this.sessionRepo.findById(existing.attributedPaymentId);
+        if (targetSession && isTerminalStatus(targetSession.status) && targetSession.status !== PaymentStatus.SUCCESS) {
+          const savedObs = this.obsRepo.create(normalizedObs);
+          this.obsRepo.markLateUnmatched(savedObs.id);
+          if (this.auditRepo) {
+            this.auditRepo.log({
+              merchantId: targetSession.merchantId,
+              entityType: 'PAYMENT_SESSION',
+              entityId: targetSession.id,
+              action: 'LATE_OBSERVATION_DETECTED',
+              actorType: 'SYSTEM',
+              details: {
+                observationId: savedObs.id,
+                source: normalizedObs.source,
+                sessionStatus: targetSession.status
+              }
+            });
+          }
+          if (this.ticketRepo && targetSession.customerId) {
+            this.ticketRepo.createTicket({
+              merchantId: targetSession.merchantId,
+              customerId: targetSession.customerId,
+              paymentId: targetSession.id,
+              subject: `[LATE PAYMENT DETECTED] Order #${targetSession.orderId}`,
+              status: TicketStatus.OPEN,
+              initialMessage: {
+                senderType: SenderType.ADMIN,
+                senderId: targetSession.merchantId,
+                message: `A delayed payment observation of ${normalizedObs.amountPaise / 100n} INR was detected after session ${targetSession.id} ended with status ${targetSession.status}. Flagged for manual merchant reconciliation.`
+              }
+            });
+          }
+          this.eventEmitter.emit('PAYMENT.LATE_DETECTED', {
+            paymentId: targetSession.id,
+            orderId: targetSession.orderId,
+            merchantId: targetSession.merchantId,
+            amountPaise: normalizedObs.amountPaise,
+            observationId: savedObs.id
+          });
+          return {
+            attributed: false,
+            duplicate: false,
+            lateMatch: true,
+            paymentSessionId: targetSession.id,
+            observationId: savedObs.id,
+            outcomeStatus: ObservationAttributionStatus.LATE_UNMATCHED
+          };
+        }
+
         // Cancel pending 5-second grace timer if any
         const pendingTimer = this.pendingGraceTimers.get(existing.attributedPaymentId);
         if (pendingTimer) {
@@ -354,6 +403,53 @@ export class AttributionEngine {
 
         const graceTimer = setTimeout(() => {
           this.pendingGraceTimers.delete(targetSessionId);
+          // Check if session became terminal during the grace window
+          const latestSession = this.sessionRepo.findById(targetSessionId);
+          if (!latestSession || (isTerminalStatus(latestSession.status) && latestSession.status !== PaymentStatus.SUCCESS)) {
+            const sessionStatus = latestSession ? latestSession.status : 'EXPIRED';
+            this.obsRepo.markLateUnmatched(targetObsId);
+            if (this.auditRepo) {
+              this.auditRepo.log({
+                merchantId: targetMerchantId,
+                entityType: 'PAYMENT_SESSION',
+                entityId: targetSessionId,
+                action: 'LATE_OBSERVATION_DETECTED',
+                actorType: 'SYSTEM',
+                details: {
+                  observationId: targetObsId,
+                  source: targetSource,
+                  sessionStatus
+                }
+              });
+            }
+            if (this.ticketRepo && latestSession?.customerId) {
+              this.ticketRepo.createTicket({
+                merchantId: targetMerchantId,
+                customerId: latestSession.customerId,
+                paymentId: targetSessionId,
+                subject: `[LATE PAYMENT DETECTED] Order #${targetOrderId}`,
+                status: TicketStatus.OPEN,
+                initialMessage: {
+                  senderType: SenderType.ADMIN,
+                  senderId: targetMerchantId,
+                  message: `A delayed payment observation of ${targetAmountPaise / 100n} INR was detected after session ${targetSessionId} ended with status ${sessionStatus}. Flagged for manual merchant reconciliation.`
+                }
+              });
+            }
+            this.eventEmitter.emit('PAYMENT.LATE_DETECTED', {
+              paymentId: targetSessionId,
+              orderId: targetOrderId,
+              merchantId: targetMerchantId,
+              amountPaise: targetAmountPaise,
+              observationId: targetObsId
+            });
+            return;
+          }
+
+          if (latestSession.status === PaymentStatus.SUCCESS) {
+            return;
+          }
+
           // 5 seconds elapsed without second source: finalize as Level 1
           const finalResult = this.sessionRepo.recordVerificationSource(
             targetSessionId,

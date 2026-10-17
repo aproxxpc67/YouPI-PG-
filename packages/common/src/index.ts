@@ -5,3 +5,4 @@ export * from './observation.js';
 export * from './upi.js';
 export * from './upi-providers.js';
 export * from './contracts.js';
+export * from './state-machine.js';

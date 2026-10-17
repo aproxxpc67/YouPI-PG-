@@ -6,3 +6,4 @@ export * from './upi.js';
 export * from './upi-providers.js';
 export * from './contracts.js';
 export * from './runtime-config.js';
+export * from './state-machine.js';
