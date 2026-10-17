@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { PaymentStatus, PaymentMethod } from '@youpi/common';
+import { PaymentStatus, PaymentMethod, assertValidTransition, isTerminalStatus } from '@youpi/common';
 
 export class PaymentSessionRepository {
   /**
@@ -87,6 +87,16 @@ export class PaymentSessionRepository {
       const now = new Date();
       const nowIso = now.toISOString();
 
+      const session = this.findById(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+      // Terminal sessions cannot acquire a slot or move back to ACTIVE or QUEUED
+      if (isTerminalStatus(session.status)) {
+        throw new Error(
+          `Cannot acquire slot for session in terminal status: ${session.status}`
+        );
+      }
+
       // Check for current active or processing session on this receiving account
       let activeRow = this.db.queryOne(`
         SELECT id, status, expires_at, processing_expires_at
@@ -100,11 +110,12 @@ export class PaymentSessionRepository {
           (activeRow.status === PaymentStatus.PROCESSING && activeRow.processing_expires_at && new Date(activeRow.processing_expires_at) <= now);
         if (isStale) {
           const terminalStatus = activeRow.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.EXPIRED;
+          assertValidTransition(activeRow.status, terminalStatus);
           this.db.execute(`
             UPDATE payment_sessions
             SET status = ?, completed_at = ?, updated_at = ?
-            WHERE id = ?
-          `, [terminalStatus, nowIso, nowIso, activeRow.id]);
+            WHERE id = ? AND status = ?
+          `, [terminalStatus, nowIso, nowIso, activeRow.id, activeRow.status]);
           activeRow = null;
         }
       }
@@ -120,13 +131,16 @@ export class PaymentSessionRepository {
 
       if (!activeRow) {
         // Slot is vacant! Grant ACTIVE slot
+        if (session.status !== PaymentStatus.ACTIVE) {
+          assertValidTransition(session.status, PaymentStatus.ACTIVE);
+        }
         const expiresAt = new Date(now.getTime() + durationMs).toISOString();
 
         this.db.execute(`
           UPDATE payment_sessions
           SET status = ?, slot_acquired_at = ?, expires_at = ?, queue_position = 0, updated_at = ?
-          WHERE id = ?
-        `, [PaymentStatus.ACTIVE, nowIso, expiresAt, nowIso, sessionId]);
+          WHERE id = ? AND status IN (?, ?)
+        `, [PaymentStatus.ACTIVE, nowIso, expiresAt, nowIso, sessionId, PaymentStatus.INITIATED, PaymentStatus.QUEUED]);
 
         // Mark receiving account as busy
         this.db.execute(`
@@ -142,8 +156,10 @@ export class PaymentSessionRepository {
         };
       } else {
         // Slot is busy! Place in QUEUED
-        const existingSession = this.findById(sessionId);
-        let queuePosition = existingSession?.queuePosition;
+        if (session.status !== PaymentStatus.QUEUED) {
+          assertValidTransition(session.status, PaymentStatus.QUEUED);
+        }
+        let queuePosition = session.queuePosition;
         if (!queuePosition || queuePosition <= 0) {
           const posRow = this.db.queryOne(`
             SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_pos
@@ -157,8 +173,8 @@ export class PaymentSessionRepository {
         this.db.execute(`
           UPDATE payment_sessions
           SET status = ?, queue_position = ?, updated_at = ?
-          WHERE id = ?
-        `, [PaymentStatus.QUEUED, queuePosition, nowIso, sessionId]);
+          WHERE id = ? AND status IN (?, ?)
+        `, [PaymentStatus.QUEUED, queuePosition, nowIso, sessionId, PaymentStatus.INITIATED, PaymentStatus.QUEUED]);
 
         return {
           status: PaymentStatus.QUEUED,
@@ -183,9 +199,7 @@ export class PaymentSessionRepository {
         return session;
       }
 
-      if (session.status !== PaymentStatus.ACTIVE) {
-        throw new Error(`Cannot transition to PROCESSING from status: ${session.status}`);
-      }
+      assertValidTransition(session.status, PaymentStatus.PROCESSING);
 
       const now = new Date();
       const nowIso = now.toISOString();
@@ -210,17 +224,12 @@ export class PaymentSessionRepository {
       const session = this.findById(sessionId);
       if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-      // Terminal states are final
-      const terminalStates = [
-        PaymentStatus.SUCCESS,
-        PaymentStatus.FAILED,
-        PaymentStatus.EXPIRED,
-        PaymentStatus.CANCELLED
-      ];
-
-      if (terminalStates.includes(session.status)) {
+      // Terminal states are final: state cannot change
+      if (isTerminalStatus(session.status)) {
         return session; // already terminal, idempotent
       }
+
+      assertValidTransition(session.status, targetStatus);
 
       const now = new Date().toISOString();
       const attributedObsId = options.attributedObservationId || session.attributedObservationId || null;
@@ -242,8 +251,8 @@ export class PaymentSessionRepository {
       this.db.execute(`
         UPDATE payment_sessions
         SET status = ?, completed_at = ?, attributed_observation_id = ?, metadata = ?, updated_at = ?
-        WHERE id = ?
-      `, [targetStatus, now, attributedObsId, JSON.stringify(metadata), now, sessionId]);
+        WHERE id = ? AND status = ?
+      `, [targetStatus, now, attributedObsId, JSON.stringify(metadata), now, sessionId, session.status]);
 
       // Release slot on receiving account if this session owned it
       if (session.receivingAccountId) {
@@ -476,9 +485,22 @@ export class PaymentSessionRepository {
         tag = `Dual Verification (${sourceLabels.join(' + ')})`;
       }
 
+      // Terminal non-success sessions cannot transition to SUCCESS
+      if (isTerminalStatus(session.status) && session.status !== PaymentStatus.SUCCESS) {
+        throw new Error(
+          `Cannot record verification for terminal session in status '${session.status}'. Terminal states are final.`
+        );
+      }
+
       const shouldFinalize = options.finalizeSuccess !== false;
-      const isFirstSuccess = shouldFinalize && session.status !== PaymentStatus.SUCCESS && level >= 1;
-      const targetStatus = shouldFinalize && level >= 1 ? PaymentStatus.SUCCESS : session.status;
+      const willFinalize = shouldFinalize && level >= 1 && session.status !== PaymentStatus.SUCCESS;
+
+      if (willFinalize) {
+        assertValidTransition(session.status, PaymentStatus.SUCCESS);
+      }
+
+      const targetStatus = willFinalize ? PaymentStatus.SUCCESS : session.status;
+      const isFirstSuccess = willFinalize;
       const now = new Date().toISOString();
 
       this.db.execute(`
@@ -490,7 +512,7 @@ export class PaymentSessionRepository {
             attributed_observation_id = COALESCE(attributed_observation_id, ?),
             completed_at = COALESCE(completed_at, ?),
             updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND status = ?
       `, [
         targetStatus,
         level,
@@ -499,11 +521,12 @@ export class PaymentSessionRepository {
         observationId,
         targetStatus === PaymentStatus.SUCCESS ? now : null,
         now,
-        sessionId
+        sessionId,
+        session.status
       ]);
 
       // If this transition made it terminal SUCCESS, release slot on receiving account
-      if (targetStatus === PaymentStatus.SUCCESS && session.receivingAccountId) {
+      if (targetStatus === PaymentStatus.SUCCESS && session.status !== PaymentStatus.SUCCESS && session.receivingAccountId) {
         this.db.execute(`
           UPDATE payment_receiving_accounts
           SET is_slot_busy = 0, current_active_session_id = NULL, updated_at = ?

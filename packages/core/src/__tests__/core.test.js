@@ -290,4 +290,285 @@ describe('@youpi/core Unit & Integration Tests', () => {
       assert.ok(tickets[0].subject.includes('LATE PAYMENT DETECTED'));
     });
   });
+
+  describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
+    let db;
+    let sessionRepo;
+    let obsRepo;
+    let ticketRepo;
+    let auditRepo;
+    let customerRepo;
+    let defaultMerchant;
+    let receivingAccount;
+    let attributionEngine;
+    let emittedEvents;
+
+    beforeEach(() => {
+      db = new Database({ inMemory: true });
+      const seed = runMigrations(db);
+      defaultMerchant = seed.defaultMerchant;
+      receivingAccount = { id: '00000000-0000-0000-0000-000000000002' };
+
+      sessionRepo = new PaymentSessionRepository(db);
+      obsRepo = new ObservationRepository(db);
+      ticketRepo = new SupportTicketRepository(db);
+      auditRepo = new AuditLogRepository(db);
+      customerRepo = new CustomerRepository(db);
+
+      emittedEvents = [];
+      attributionEngine = new AttributionEngine({
+        sessionRepo,
+        obsRepo,
+        ticketRepo,
+        auditRepo,
+        eventEmitter: {
+          emit: (event, payload) => emittedEvents.push({ event, payload })
+        }
+      });
+    });
+
+    afterEach(() => {
+      db.close();
+    });
+    test('strictly forbids all transitions out of terminal states in the state machine', () => {
+      const terminalStates = [
+        PaymentStatus.SUCCESS,
+        PaymentStatus.FAILED,
+        PaymentStatus.EXPIRED,
+        PaymentStatus.CANCELLED
+      ];
+
+      const allStates = [
+        PaymentStatus.INITIATED,
+        PaymentStatus.QUEUED,
+        PaymentStatus.ACTIVE,
+        PaymentStatus.PROCESSING,
+        PaymentStatus.SUCCESS,
+        PaymentStatus.FAILED,
+        PaymentStatus.EXPIRED,
+        PaymentStatus.CANCELLED
+      ];
+
+      for (const terminal of terminalStates) {
+        for (const target of allStates) {
+          assert.equal(
+            isValidTransition(terminal, target),
+            false,
+            `Expected isValidTransition('${terminal}', '${target}') to be false`
+          );
+          assert.throws(
+            () => assertValidTransition(terminal, target),
+            /Illegal payment state transition/
+          );
+        }
+      }
+    });
+
+    test('acquireSlotAtomic rejects sessions in terminal status', () => {
+      const testCases = [
+        PaymentStatus.SUCCESS,
+        PaymentStatus.FAILED,
+        PaymentStatus.EXPIRED,
+        PaymentStatus.CANCELLED
+      ];
+
+      for (const status of testCases) {
+        const session = sessionRepo.create({
+          merchantId: defaultMerchant.id,
+          receivingAccountId: receivingAccount.id,
+          orderId: `ORD-TERMINAL-${status}`,
+          amountPaise: 50000n
+        });
+
+        if (status === PaymentStatus.CANCELLED) {
+          sessionRepo.transitionToTerminal(session.id, PaymentStatus.CANCELLED);
+        } else {
+          sessionRepo.acquireSlotAtomic(session.id, receivingAccount.id);
+          sessionRepo.transitionToTerminal(session.id, status);
+        }
+
+        const terminalSession = sessionRepo.findById(session.id);
+        assert.equal(terminalSession.status, status);
+
+        assert.throws(
+          () => sessionRepo.acquireSlotAtomic(session.id, receivingAccount.id),
+          /Cannot acquire slot for session in terminal status/
+        );
+
+        // Status must remain terminal in database
+        const afterAttempt = sessionRepo.findById(session.id);
+        assert.equal(afterAttempt.status, status);
+      }
+    });
+
+    test('recordVerificationSource throws on terminal non-success sessions and preserves terminal status', () => {
+      const terminalStatuses = [
+        PaymentStatus.FAILED,
+        PaymentStatus.EXPIRED,
+        PaymentStatus.CANCELLED
+      ];
+
+      for (const status of terminalStatuses) {
+        const session = sessionRepo.create({
+          merchantId: defaultMerchant.id,
+          receivingAccountId: receivingAccount.id,
+          orderId: `ORD-VERIFY-${status}`,
+          amountPaise: 40000n
+        });
+        if (status === PaymentStatus.CANCELLED) {
+          sessionRepo.transitionToTerminal(session.id, PaymentStatus.CANCELLED);
+        } else {
+          sessionRepo.acquireSlotAtomic(session.id, receivingAccount.id);
+          sessionRepo.transitionToTerminal(session.id, status);
+        }
+
+        assert.throws(
+          () => sessionRepo.recordVerificationSource(session.id, ObserverSource.GMAIL, 'obs_fake_123', { finalizeSuccess: true }),
+          /Cannot record verification for terminal session in status/
+        );
+
+        // Status in database must still be the terminal status
+        const unchanged = sessionRepo.findById(session.id);
+        assert.equal(unchanged.status, status);
+      }
+    });
+
+    test('transitionToProcessing rejects terminal sessions and non-active sessions', () => {
+      // 1. INITIATED session rejects transition to PROCESSING
+      const initiated = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-INITIATED',
+        amountPaise: 15000n
+      });
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(initiated.id),
+        /Illegal payment state transition/
+      );
+
+      // 2. QUEUED session rejects transition to PROCESSING
+      const activeSess = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-ACTIVE',
+        amountPaise: 15000n
+      });
+      sessionRepo.acquireSlotAtomic(activeSess.id, receivingAccount.id);
+
+      const queuedSess = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-QUEUED',
+        amountPaise: 15000n
+      });
+      sessionRepo.acquireSlotAtomic(queuedSess.id, receivingAccount.id);
+      assert.equal(sessionRepo.findById(queuedSess.id).status, PaymentStatus.QUEUED);
+
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(queuedSess.id),
+        /Illegal payment state transition/
+      );
+
+      // 3. SUCCESS session rejects transition to PROCESSING
+      sessionRepo.transitionToTerminal(activeSess.id, PaymentStatus.SUCCESS);
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(activeSess.id),
+        /Illegal payment state transition/
+      );
+
+      // 4. CANCELLED session rejects transition to PROCESSING
+      const cancelled = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-CANCELLED',
+        amountPaise: 15000n
+      });
+      sessionRepo.transitionToTerminal(cancelled.id, PaymentStatus.CANCELLED);
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(cancelled.id),
+        /Illegal payment state transition/
+      );
+
+      // 5. EXPIRED session rejects transition to PROCESSING
+      const expired = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-EXPIRED',
+        amountPaise: 15000n
+      });
+      sessionRepo.acquireSlotAtomic(expired.id, receivingAccount.id);
+      sessionRepo.transitionToTerminal(expired.id, PaymentStatus.EXPIRED);
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(expired.id),
+        /Illegal payment state transition/
+      );
+
+      // 6. FAILED session rejects transition to PROCESSING
+      const failed = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-PROC-FAILED',
+        amountPaise: 15000n
+      });
+      sessionRepo.acquireSlotAtomic(failed.id, receivingAccount.id);
+      sessionRepo.transitionToTerminal(failed.id, PaymentStatus.FAILED);
+      assert.throws(
+        () => sessionRepo.transitionToProcessing(failed.id),
+        /Illegal payment state transition/
+      );
+    });
+
+    test('AttributionEngine does not revive expired session to SUCCESS and creates support ticket', () => {
+      const customer = customerRepo.create({
+        merchantId: defaultMerchant.id,
+        phoneNumber: '9123456780',
+        fullName: 'Late Paying User',
+        password: 'Password9!'
+      });
+
+      const expiredSession = sessionRepo.create({
+        merchantId: defaultMerchant.id,
+        customerId: customer.id,
+        receivingAccountId: receivingAccount.id,
+        orderId: 'ORD-LATE-RECONCILE',
+        amountPaise: 75000n
+      });
+
+      sessionRepo.acquireSlotAtomic(expiredSession.id, receivingAccount.id);
+      sessionRepo.transitionToTerminal(expiredSession.id, PaymentStatus.EXPIRED);
+
+      const lateObs = ObservationNormalizer.normalize({
+        source: ObserverSource.GMAIL,
+        receivingAccountId: receivingAccount.id,
+        amountPaise: 75000n,
+        bankReferenceNumber: 'UTR-LATE-999',
+        observedAt: new Date(),
+        rawPayload: { text: 'Bank alert Rs 750' }
+      });
+
+      const result = attributionEngine.processObservation(lateObs);
+
+      assert.equal(result.attributed, false);
+      assert.equal(result.lateMatch, true);
+      assert.equal(result.paymentSessionId, expiredSession.id);
+      assert.equal(result.outcomeStatus, ObservationAttributionStatus.LATE_UNMATCHED);
+
+      // Verify the session status in DB is STILL EXPIRED (not SUCCESS)
+      const freshSession = sessionRepo.findById(expiredSession.id);
+      assert.equal(freshSession.status, PaymentStatus.EXPIRED);
+
+      // Verify support ticket was created
+      const tickets = ticketRepo.findTicketsByCustomer(customer.id);
+      assert.ok(tickets.length >= 1);
+      const ticket = tickets.find(t => t.paymentId === expiredSession.id);
+      assert.ok(ticket);
+      assert.ok(ticket.subject.includes('[LATE PAYMENT DETECTED]'));
+
+      // Verify PAYMENT.LATE_DETECTED was emitted and not PAYMENT.SUCCESS
+      const lateEvents = emittedEvents.filter(e => e.event === 'PAYMENT.LATE_DETECTED' && e.payload.paymentId === expiredSession.id);
+      assert.equal(lateEvents.length, 1);
+      const successEvents = emittedEvents.filter(e => e.event === 'PAYMENT.SUCCESS' && e.payload.paymentId === expiredSession.id);
+      assert.equal(successEvents.length, 0);
+    });
+  });
 });
