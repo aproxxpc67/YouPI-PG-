@@ -7,6 +7,11 @@ import { generateQrSvg } from './qr.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Keeps Razorpay blue as the default checkout brand colour while still honouring
+// any colour a merchant has explicitly configured. Runs after the checkout
+// script has defined applyDynamicTheme().
+const RZP_THEME_SCRIPT = '<script>(function(){try{var a=window.applyDynamicTheme;if(typeof a==="function"&&!a.__rzpDefaulted){window.applyDynamicTheme=function(b){b=Object.assign({},b||{});if(!b.primaryColor){b.primaryColor="#3395ff";}return a(b);};window.applyDynamicTheme.__rzpDefaulted=true;}}catch(e){}})();</script>';
+
 // In production, reliably ensure environment variables from .env are loaded if not already provided
 if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'function') {
   try {
@@ -41,8 +46,10 @@ export class CheckoutServer {
 
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
     this.htmlTemplatePath = path.join(__dirname, 'views', 'checkout.html');
+    this.themeCssPath = path.join(__dirname, 'views', 'razorpay-theme.css');
     this.sdkScriptPath = path.join(__dirname, 'sdk', 'youpi-checkout.js');
     this.template = fs.readFileSync(this.htmlTemplatePath, 'utf8');
+    this.themeCss = fs.existsSync(this.themeCssPath) ? fs.readFileSync(this.themeCssPath, 'utf8') : '';
   }
 
   async fetchPaymentState(paymentId) {
@@ -66,13 +73,21 @@ export class CheckoutServer {
     let html = this.template;
 
     const appName = state?.branding?.appName || 'YouPI PG';
-    const primaryColor = state?.branding?.primaryColor || '#0b63e5';
+    const primaryColor = state?.branding?.primaryColor || '#3395ff';
     const merchantName = state?.merchantName || 'Merchant Checkout';
     const orderId = state?.orderId || '';
     const logoUrl = state?.branding?.logoUrl || '';
     const sidebarNotice = state?.branding?.sidebarNotice || 'Fast & Secure 256-Bit Encrypted Payments';
     const counterInstructions = state?.branding?.counterInstructions || 'Please visit the billing counter and present this screen to the cashier.';
     const vpa = state?.payeeVpa || state?.vpa || 'merchant@upi';
+    const amount = state?.amount || '0.00';
+
+    // Razorpay blue is the default brand colour; an explicit merchant colour still wins.
+    // Seeded here so the initial client-side render paints in the right colour.
+    if (state) {
+      state.branding = { ...(state.branding || {}) };
+      if (!state.branding.primaryColor) state.branding.primaryColor = primaryColor;
+    }
 
     // In production and localhost, use relative '' so browser requests hit the checkout portal /api proxy
     // This avoids cross-origin blocking, CORS errors, and tunnel DNS resolution issues.
@@ -130,6 +145,29 @@ export class CheckoutServer {
     html = html.replaceAll('{{DOWNTIME_ALT_BTN_LABEL}}', downtimeAltBtnLabel);
     html = html.replaceAll('{{INITIAL_STATE_JSON}}', JSON.stringify(state || {}).replaceAll('<', '\\u003c'));
 
+    return this.injectTheme(html, amount);
+  }
+
+  /**
+   * Injects the Razorpay-standard presentation layer into the rendered checkout.
+   * Keeps the large checkout.html template untouched.
+   * @param {string} html
+   * @param {string} amount
+   */
+  injectTheme(html, amount) {
+    if (this.themeCss) {
+      html = html.replace('</head>', '<style id="rzpStandardTheme">' + this.themeCss + '</style></head>');
+    }
+
+    // Payable amount in the branded header (Razorpay shows it top-right).
+    const headerAmount = '<div class="ypg-header-amount-group">' +
+      '<div class="ypg-header-amount" id="headerAmountDisplay">₹' + amount + '</div></div>';
+    html = html.replace(
+      '<!-- Right Profile Button (Toggles User Details Popover) -->',
+      headerAmount + '<!-- Right Profile Button (Toggles User Details Popover) -->'
+    );
+
+    html = html.replace('</body>', RZP_THEME_SCRIPT + '</body>');
     return html;
   }
 

@@ -1,0 +1,326 @@
+/* ==========================================================================
+   YOUPI PG · RAZORPAY STANDARD CHECKOUT THEME
+   --------------------------------------------------------------------------
+   A presentation layer that aligns the customer checkout with Razorpay's
+   standard checkout: a branded blue header carrying the merchant + amount,
+   a clean payment-method list, a "Scan & Pay" UPI QR panel and a
+   "Secured by" footer.
+
+   This file is injected into the rendered checkout by the checkout server
+   (see server.js -> injectTheme). Keeping the theme here leaves the large
+   checkout.html template untouched and lets the theme be revised on its own.
+
+   Merchant white-labelling is preserved: whenever a merchant sets a brand
+   colour, that colour still drives the header and sidebar. Razorpay blue is
+   only used as the default when no brand colour is configured.
+   ========================================================================== */
+
+:root {
+  /* Razorpay design tokens */
+  --rzp-blue: #3395ff;
+  --rzp-blue-hover: #1d6ee8;
+  --rzp-blue-deep: #1d6ee8;
+  --rzp-ink: #0a2540;
+  --rzp-sub: #6b7c93;
+  --rzp-line: #e6ebf1;
+  --rzp-surface: #f7f9fc;
+
+  /* Default checkout palette (used until/unless a merchant brand colour is set) */
+  --ypg-blue: #3395ff;
+  --ypg-blue-dark: #1d6ee8;
+  --ypg-navy: #0a2540;
+  --ypg-header-gradient: linear-gradient(180deg, #3395ff 0%, #1d6ee8 100%);
+  --ypg-bg: #f7f9fc;
+  --ypg-text-dark: #0a2540;
+  --ypg-text-muted: #6b7c93;
+  --ypg-border: #e6ebf1;
+  --ypg-border-light: #eef2f7;
+}
+
+/* --- Splash emblem gradient --- */
+#ypgShieldGrad stop:first-child { stop-color: #3395ff; }
+#ypgShieldGrad stop:last-child { stop-color: #1d6ee8; }
+
+/* --- Checkout card: Razorpay's compact rounded modal --- */
+.ypg-wrapper {
+  max-width: 420px;
+  border-radius: 14px;
+}
+
+@media (max-width: 600px) {
+  .ypg-wrapper {
+    border-top-left-radius: 18px;
+    border-top-right-radius: 18px;
+  }
+}
+
+/* --- Header: solid brand-blue bar with merchant + amount --- */
+.ypg-header {
+  background: var(--ypg-header-gradient);
+  color: #ffffff;
+}
+
+.ypg-header-main-row {
+  padding: 14px 16px 12px 16px;
+}
+
+.ypg-merchant-avatar {
+  background: #ffffff;
+  color: var(--ypg-blue);
+  border: none;
+  border-radius: 9px;
+  font-weight: 800;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.ypg-merchant-name {
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+
+.ypg-trusted-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.ypg-header-amount-group {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding-left: 10px;
+}
+
+.ypg-header-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+}
+
+.ypg-btn-profile {
+  background: rgba(255, 255, 255, 0.18);
+  width: 32px;
+  height: 32px;
+}
+
+.ypg-btn-profile:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.ypg-header-subbanner {
+  background: rgba(0, 0, 0, 0.10);
+  font-weight: 500;
+}
+
+/* --- Titles --- */
+.ypg-page-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--rzp-ink);
+  letter-spacing: -0.2px;
+}
+
+/* --- Payment method selector (mobile segmented control) --- */
+.ypg-method-selector-bar {
+  background: #eef2f7;
+  border: none;
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.ypg-method-tab {
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rzp-sub);
+  padding: 9px 8px;
+}
+
+.ypg-method-tab:hover {
+  color: var(--rzp-ink);
+}
+
+.ypg-method-tab.active {
+  background: #ffffff;
+  color: var(--rzp-blue);
+  box-shadow: 0 1px 3px rgba(10, 37, 64, 0.10);
+}
+
+/* --- UPI "Scan & Pay" panel --- */
+.ypg-qr-card-container {
+  background: #ffffff;
+  border: 1px solid var(--rzp-line);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
+}
+
+.ypg-qr-image-box {
+  width: 142px;
+  height: 142px;
+  border: 1px solid var(--rzp-line);
+  border-radius: 12px;
+}
+
+.ypg-qr-prompt-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rzp-ink);
+}
+
+.ypg-section-heading {
+  color: var(--rzp-ink);
+  font-weight: 600;
+}
+
+.ypg-countdown-pill {
+  background: #eef4ff;
+  border-color: #d6e6ff;
+  color: var(--rzp-blue);
+}
+
+.ypg-app-icon {
+  width: 26px;
+  height: 26px;
+}
+
+/* --- Numbered instructions (Razorpay help list) --- */
+.ypg-instructions-card {
+  border-radius: 12px;
+  border: 1px solid var(--rzp-line);
+  background: var(--rzp-surface);
+}
+
+.ypg-step-num {
+  background: var(--rzp-blue);
+  color: #ffffff;
+}
+
+/* --- Primary CTAs: Razorpay blue --- */
+.ypg-btn-auth-action {
+  background: var(--rzp-blue);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.ypg-btn-auth-action:hover {
+  background: var(--rzp-blue-hover);
+}
+
+.ypg-btn-continue {
+  background: var(--rzp-blue);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.ypg-btn-continue:hover {
+  background: var(--rzp-blue-hover);
+}
+
+/* --- Inputs --- */
+.ypg-input-control:focus,
+.ypg-phone-input-wrap:focus-within {
+  border-color: var(--rzp-blue);
+  box-shadow: 0 0 0 3px rgba(51, 149, 255, 0.18);
+}
+
+/* --- Footer: "Secured by" strip --- */
+.ypg-sticky-footer {
+  border-top: 1px solid var(--rzp-line);
+}
+
+.ypg-legal-disclaimer {
+  color: var(--rzp-sub);
+}
+
+.ypg-bottom-price {
+  color: var(--rzp-ink);
+}
+
+.ypg-btn-view-details:hover {
+  color: var(--rzp-blue);
+}
+
+/* --- Mobile: center the QR panel like Razorpay's UPI screen --- */
+@media (max-width: 600px) {
+  .ypg-qr-card-container {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 14px;
+  }
+
+  .ypg-qr-details-col {
+    align-items: center;
+    width: 100%;
+  }
+}
+
+/* --- Desktop two-column: Razorpay-style method rows --- */
+@media (min-width: 768px) {
+  .ypg-pc-sidebar {
+    background: linear-gradient(180deg, var(--ypg-blue) 0%, var(--ypg-blue-dark) 100%);
+  }
+
+  .ypg-pc-method-card {
+    position: relative;
+    border: 1px solid var(--rzp-line);
+    border-left: 3px solid transparent;
+    border-radius: 10px;
+    padding: 11px 30px 11px 12px;
+  }
+
+  .ypg-pc-method-card::after {
+    content: '\203A';
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    line-height: 1;
+    color: #b6c2d1;
+  }
+
+  .ypg-pc-method-card:hover {
+    border-color: #d7e3f0;
+    background: var(--rzp-surface);
+  }
+
+  .ypg-pc-method-card.is-active {
+    border-color: #cfe4ff;
+    border-left-color: var(--rzp-blue);
+    background: #f2f8ff;
+    box-shadow: none;
+  }
+
+  .ypg-pc-method-card.is-active::after {
+    color: var(--rzp-blue);
+  }
+
+  .ypg-pc-method-title {
+    font-weight: 600;
+    color: var(--rzp-ink);
+  }
+
+  .ypg-pc-method-sub {
+    color: var(--rzp-sub);
+  }
+
+  .ypg-pc-topbar-title {
+    color: var(--rzp-ink);
+    font-weight: 600;
+  }
+
+  .ypg-pc-price-card {
+    border-radius: 12px;
+  }
+
+  .ypg-pc-price-val {
+    color: var(--rzp-ink);
+  }
+}
